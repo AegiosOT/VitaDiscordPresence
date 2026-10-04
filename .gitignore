@@ -6,3 +6,11 @@ pc/*/bin
 pc/*/obj
 
 plugin/build
+
+.DS_Store
+xcuserdata/
+*.xcuserstate
+
+mac/.build/
+mac/.swiftpm/
+mac/dist/
