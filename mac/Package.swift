@@ -17,6 +17,10 @@ let testSwiftSettings: [SwiftSetting] =
 let package = Package(
     name: "VitaPresence",
     platforms: [.macOS(.v13)],
+    products: [
+        .executable(name: "VitaPresence", targets: ["VitaPresenceApp"]),
+        .executable(name: "vitapresence-cli", targets: ["VitaPresenceCLI"]),
+    ],
     targets: [
         // Vita protocol and LAN networking.
         .target(name: "VitaKit"),
@@ -24,6 +28,8 @@ let package = Package(
         .target(name: "DiscordIPC"),
         // Settings, presence rules and the poll loop shared by the app and the CLI.
         .target(name: "PresenceKit", dependencies: ["VitaKit", "DiscordIPC"]),
+        .executableTarget(name: "VitaPresenceApp", dependencies: ["PresenceKit", "VitaKit", "DiscordIPC"]),
+        .executableTarget(name: "VitaPresenceCLI", dependencies: ["PresenceKit", "VitaKit", "DiscordIPC"]),
 
         // Loopback mock servers (fake Vita plugin, fake Discord) shared by the test targets.
         .target(name: "TestSupport", dependencies: ["VitaKit", "DiscordIPC"], path: "Tests/TestSupport"),
@@ -40,6 +46,18 @@ let package = Package(
         .testTarget(
             name: "PresenceKitTests",
             dependencies: ["PresenceKit", "VitaKit", "DiscordIPC", "TestSupport"],
+            swiftSettings: testSwiftSettings
+        ),
+        // The app and CLI targets are tested through `@testable import` with fakes; the CLI tests also run the
+        // built `vitapresence-cli` against the loopback mocks. No LAN traffic, no GUI.
+        .testTarget(
+            name: "VitaPresenceAppTests",
+            dependencies: ["VitaPresenceApp", "PresenceKit", "VitaKit", "DiscordIPC"],
+            swiftSettings: testSwiftSettings
+        ),
+        .testTarget(
+            name: "VitaPresenceCLITests",
+            dependencies: ["VitaPresenceCLI", "PresenceKit", "VitaKit", "DiscordIPC", "TestSupport"],
             swiftSettings: testSwiftSettings
         ),
     ]
