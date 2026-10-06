@@ -4,13 +4,14 @@ import os
 import VitaKit
 
 /// A loopback TCP server that behaves like the Vita plugin: for each accepted connection it performs the
-/// current `Behavior`, and by default sends one 148-byte packet and closes.
+/// current `Behavior`, normally sending one packet and closing.
 ///
 /// It listens on `127.0.0.1` on an ephemeral port (`port`). Loopback isn't subject to Local Network
 /// privacy, so tests never trigger the permission prompt.
 public final class MockVitaServer: Sendable {
     public enum Behavior: Sendable, Equatable {
-        /// Send `VitaPacket.encode(title)` (148 bytes), then close. This is the plugin's normal behaviour.
+        /// Send `VitaPacket.encode(title)`, then close. This is the plugin's normal behaviour: 148 bytes like
+        /// plugins before 1.1, or 184 bytes like plugin 1.1 when the title has a content ID.
         case packet(VitaTitle)
         /// Send these exact bytes, then close.
         case raw([UInt8])

@@ -20,6 +20,7 @@ struct MenuBarIconTests {
 
     @Test(arguments: [
         PresenceSnapshot.idle,
+        PresenceSnapshot(isRunning: true, vita: .resolving, discord: .connecting),
         PresenceSnapshot(isRunning: true, vita: .connecting, discord: .connecting),
         PresenceSnapshot(isRunning: true, vita: .failing(.timedOut, failures: 4)),
         PresenceSnapshot(isRunning: true, vita: .connected, discord: .unavailable(.discordNotRunning)),
@@ -29,8 +30,9 @@ struct MenuBarIconTests {
     }
 
     @Test(arguments: [
-        PresenceSnapshot(isRunning: true, vita: .misconfigured("Enter your Vita's IP or MAC address")),
+        PresenceSnapshot(isRunning: true, vita: .misconfigured(PresenceSettings.Issue.invalidAddress.message)),
         PresenceSnapshot(isRunning: true, vita: .failing(.localNetworkDenied, failures: 1)),
+        PresenceSnapshot(isRunning: true, vita: .failing(.severalVitas(["192.0.2.20", "192.0.2.21"]), failures: 1)),
         PresenceSnapshot(isRunning: true, vita: .connected, discord: .unavailable(.invalidClientID)),
         // Asking for action wins over a presence that is still showing.
         PresenceSnapshot(isRunning: true, vita: .failing(.localNetworkDenied, failures: 1), publishedActivity: activity),

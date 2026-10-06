@@ -4,8 +4,8 @@ import VitaKit
 /// Help, usage and hint texts, wrapped for an 80-column terminal.
 enum Usage {
     static let synopsis = """
-        Usage: \(CommandLineTool.name) --address <ip|mac> --client-id <id> [options]
-               \(CommandLineTool.name) <ip|mac> <client-id> [options]
+        Usage: \(CommandLineTool.name) [options]
+               \(CommandLineTool.name) <ip|mac> [<client-id>] [options]
                \(CommandLineTool.name) --scan [--port <n>]
                \(CommandLineTool.name) --help | --version
         """
@@ -23,11 +23,15 @@ enum Usage {
             \(synopsis)
 
             Options:
-              --address <ip|mac>       The Vita's IPv4 or MAC address
-              --client-id <id>         Your Discord application ID
+              --address <ip|mac|auto>  The Vita's IPv4 or MAC address (default: auto, which
+                                       finds the Vita on the local network)
+              --client-id <id>         Your own Discord application ID (default: the
+                                       built-in application)
               --state <text>           Second line under the game name
               --interval <seconds>     Time between polls, \(interval) (default \(defaultInterval))
-              --large-image <key|url>  Art asset key or https image URL
+              --large-image <key|url>  Custom image instead of the game artwork: an art
+                                       asset key of your own application, or an https URL
+              --no-artwork             Don't look up or show the game artwork
               --no-elapsed             Don't show the elapsed time
               --hide-livearea          Show nothing while the Vita is in the LiveArea
               --verbose                Print every status update, not only changes
@@ -39,10 +43,14 @@ enum Usage {
               --port <n>               Port of the Vita plugin (default \(VitaPacket.port))
               --discord-socket <path>  Connect only to this Discord IPC socket
 
-            Create a Discord application at https://discord.com/developers/applications
-            and use its Application ID as the client ID. The Vita needs the VitaPresence
-            plugin in the *KERNEL section of ux0:tai/config.txt, and the Discord desktop
-            app must be running on this Mac. Press Ctrl-C to clear the presence and quit.
+            Without options, the Vita is found on the local network and the built-in
+            Discord application is used. The Vita needs the VitaPresence plugin in the
+            *KERNEL section of ux0:tai/config.txt, and the Discord desktop app must be
+            running on this Mac. Press Ctrl-C to clear the presence and quit.
+
+            To find the game artwork, this Mac looks up the running game on
+            store.playstation.com, GitHub (HexFlow-Covers) and NeoVitaDB, and Discord
+            loads the picture from there. --no-artwork turns this off.
 
             Exit status: 0 success, 1 runtime failure, 64 usage error.
             """

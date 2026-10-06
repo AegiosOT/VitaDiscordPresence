@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import PresenceKit
 import Testing
 import TestSupport
 import VitaKit
@@ -19,7 +20,8 @@ import VitaKit
 }
 
 /// Runs the built `vitapresence-cli` in a child process against the loopback mock Vita and a mock Discord
-/// socket under /tmp, and checks how it ends.
+/// socket under /tmp, and checks how it ends. Every run passes `--no-artwork`, so nothing is looked up online,
+/// and an address, so nothing is scanned.
 @Suite struct RunningTheToolTests {
     private static let clientID = "123456789012345678"
     private static let game = VitaTitle(index: 2, titleID: "PCSE00120", name: "Persona 4 Golden")
@@ -68,6 +70,34 @@ import VitaKit
         #expect(setActivities(discord).last == .some(nil))
     }
 
+    @Test func withoutAClientIDTheBuiltInApplicationIsUsed() async throws {
+        let vita = try await MockVitaServer(behavior: .packet(Self.game))
+        defer { vita.stop() }
+        let discord = try MockDiscordServer()
+        defer { discord.stop() }
+        let tool = try RunningTool(arguments: [
+            "127.0.0.1", "--port", String(vita.port), "--no-artwork", "--interval", "3",
+            "--discord-socket", discord.socketPath,
+        ])
+        defer { tool.stop() }
+        #expect(await eventually { setActivities(discord).contains(Self.game.name) })
+
+        tool.send(SIGINT)
+
+        try #require(await tool.waitForExit())
+        #expect(tool.process.terminationStatus == EXIT_SUCCESS)
+        let handshake = try #require(discord.handshakes.first)
+        let json = try #require(try JSONSerialization.jsonObject(with: handshake) as? [String: Any])
+        #expect(json["client_id"] as? String == PresenceSettings.defaultClientID)
+        let output = tool.outputLines()
+        #expect(output.first?.contains(
+            "Vita 127.0.0.1 port \(vita.port), Discord application built-in (\(PresenceSettings.defaultClientID)), "
+                + "polling every 3 s, no game artwork"
+        ) == true)
+        let status = "Vita: \(VitaStatus.connected.summary) at 127.0.0.1 - Persona 4 Golden"
+        #expect(output.contains { $0.contains(status) })
+    }
+
     @Test func unusableSettingsAreAUsageError() async throws {
         let tool = try RunningTool(arguments: ["--address", "127.0.0.1", "--client-id", "12345"])
         defer { tool.stop() }
@@ -76,24 +106,39 @@ import VitaKit
         #expect(tool.process.terminationReason == .exit)
         #expect(tool.process.terminationStatus == EX_USAGE)
         #expect(tool.outputLines().isEmpty)
-        #expect(tool.errorText().contains("The application ID should be 16 to 25 digits"))
+        let errors = tool.errorText()
+        #expect(errors.contains(PresenceSettings.Issue.invalidClientID.message))
+        #expect(errors.contains(Usage.hint))
+    }
+
+    @Test func badArgumentsAreAUsageError() async throws {
+        let tool = try RunningTool(arguments: ["127.0.0.1", "123456789012345678", "extra"])
+        defer { tool.stop() }
+
+        try #require(await tool.waitForExit())
+        #expect(tool.process.terminationReason == .exit)
+        #expect(tool.process.terminationStatus == EX_USAGE)
+        #expect(tool.outputLines().isEmpty)
+        #expect(tool.errorText() == "vitapresence-cli: unexpected argument 'extra'\n\(Usage.hint)\n")
     }
 
     private func arguments(vita: MockVitaServer, discord: MockDiscordServer) -> [String] {
         [
             "--address", "127.0.0.1", "--port", String(vita.port), "--client-id", Self.clientID,
-            "--interval", "3", "--discord-socket", discord.socketPath,
+            "--no-artwork", "--interval", "3", "--discord-socket", discord.socketPath,
         ]
     }
 
-    /// The details of every SET_ACTIVITY `discord` received, in order; `nil` for one that clears the activity.
+    /// The game every SET_ACTIVITY `discord` received shows, in order: the activity's name (the bold title), or
+    /// its details when it has no name. `nil` for one that clears the activity.
     private func setActivities(_ discord: MockDiscordServer) -> [String?] {
         discord.commands.compactMap { payload -> String?? in
             guard let command = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
                   command["cmd"] as? String == "SET_ACTIVITY",
                   let arguments = command["args"] as? [String: Any]
             else { return nil }
-            return .some((arguments["activity"] as? [String: Any])?["details"] as? String)
+            guard let activity = arguments["activity"] as? [String: Any] else { return .some(nil) }
+            return .some(activity["name"] as? String ?? activity["details"] as? String)
         }
     }
 }

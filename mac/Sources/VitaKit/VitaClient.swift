@@ -48,6 +48,12 @@ public struct VitaClient: VitaTitleFetching {
         return try await fetch.run()
     }
 
+    /// The error when the connect timer fires before the socket is ready. A denial that never left
+    /// `.preparing` is still `.localNetworkDenied`; anything else is a timeout.
+    static func connectDeadlineError(unsatisfiedReason: NWPath.UnsatisfiedReason?) -> VitaConnectionError {
+        unsatisfiedReason == .localNetworkDenied ? .localNetworkDenied : .timedOut
+    }
+
     /// Maps a connection failure. Local Network denial comes first: it surfaces with an unrelated POSIX error.
     static func connectionError(
         for error: NWError,
@@ -131,7 +137,10 @@ private final class Fetch: Sendable {
             connection.stateUpdateHandler = { [self] in handle($0) }
             connection.start(queue: queue)
             queue.asyncAfter(deadline: .now() + connectTimeout.timeInterval) { [self] in
-                finish(.failure(VitaConnectionError.timedOut), ifStillIn: .connecting)
+                // Still connecting: a Local Network denial often stays in .preparing until this timer,
+                // so the path has to be read here or the scan reports "No Vita found".
+                let reason = connection.currentPath?.unsatisfiedReason
+                finish(.failure(VitaClient.connectDeadlineError(unsatisfiedReason: reason)), ifStillIn: .connecting)
             }
         }
     }

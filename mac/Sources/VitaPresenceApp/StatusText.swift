@@ -1,7 +1,7 @@
 import Foundation
 import PresenceKit
 
-/// The status lines shown in the menu and at the bottom of the Settings window.
+/// The status lines shown in the menu and at the top of the Settings window.
 enum StatusText {
     /// Lines describing `snapshot`: the game with its elapsed time (when known), then the Vita and Discord
     /// status. A stopped controller is a single "Not connected" line, and unusable settings show their issue.

@@ -22,8 +22,15 @@ private func usageError(_ arguments: [String]) -> UsageError? {
 }
 
 @Suite struct CommandLineParserTests {
-    @Test func noArgumentsShowsTheSynopsis() {
-        #expect(usageError([]) == .noArguments)
+    @Test func noArgumentsRunWithTheDefaults() throws {
+        let options = try run([])
+        #expect(options == RunOptions())
+        // The Vita is found automatically, and the built-in Discord application is used.
+        #expect(options.settings.vitaAddress == .automatic)
+        #expect(options.settings.effectiveClientID == PresenceSettings.defaultClientID)
+        #expect(!options.settings.usesCustomClientID)
+        #expect(options.settings.showGameArtwork)
+        #expect(options.settings.issues.isEmpty)
     }
 
     @Test func helpAndVersion() throws {
@@ -41,7 +48,7 @@ private func usageError(_ arguments: [String]) -> UsageError? {
         let options = try run([
             "--address", "192.168.1.20", "--client-id", "123456789012345678", "--state", "Handheld mode",
             "--interval", "4.5", "--large-image", "https://example.com/vita.png", "--no-elapsed", "--hide-livearea",
-            "--port", "40000", "--discord-socket", "/tmp/vp/discord-ipc-0", "--verbose",
+            "--no-artwork", "--port", "40000", "--discord-socket", "/tmp/vp/discord-ipc-0", "--verbose",
         ])
         #expect(options.settings == PresenceSettings(
             address: "192.168.1.20",
@@ -50,7 +57,8 @@ private func usageError(_ arguments: [String]) -> UsageError? {
             largeImageKey: "https://example.com/vita.png",
             pollInterval: 4.5,
             showElapsedTime: false,
-            showLiveArea: false
+            showLiveArea: false,
+            showGameArtwork: false
         ))
         #expect(options.port == 40000)
         #expect(options.discordSocket == "/tmp/vp/discord-ipc-0")
@@ -63,6 +71,7 @@ private func usageError(_ arguments: [String]) -> UsageError? {
         #expect(options.settings.pollInterval == PresenceSettings.defaultPollInterval)
         #expect(options.settings.showElapsedTime)
         #expect(options.settings.showLiveArea)
+        #expect(options.settings.showGameArtwork)
         #expect(options.port == VitaPacket.port)
         #expect(options.port == 51966)
         #expect(options.discordSocket == nil)
@@ -92,10 +101,28 @@ private func usageError(_ arguments: [String]) -> UsageError? {
         #expect(usageError(["--address", "--client-id", "1"]) == .invalid("--address needs a value"))
     }
 
+    @Test func eitherOptionAloneUsesTheDefaultForTheOther() throws {
+        let address = try run(["--address", "192.168.1.20"])
+        #expect(address.settings == PresenceSettings(address: "192.168.1.20"))
+        #expect(address.settings.effectiveClientID == PresenceSettings.defaultClientID)
+        let clientID = try run(["--client-id", "123456789012345678"])
+        #expect(clientID.settings == PresenceSettings(clientID: "123456789012345678"))
+        #expect(clientID.settings.vitaAddress == .automatic)
+    }
+
+    @Test(arguments: [["--address", "auto"], ["--address=AUTOMATIC"], ["--address="], ["auto"]])
+    func automaticCanBeAskedForExplicitly(_ arguments: [String]) throws {
+        #expect(try run(arguments).settings.vitaAddress == .automatic)
+    }
+
     @Test func positionalForm() throws {
         let options = try run(["192.168.1.20", "123456789012345678"])
         #expect(options.settings.address == "192.168.1.20")
         #expect(options.settings.clientID == "123456789012345678")
+        // The client ID can be left out, or given as an option.
+        #expect(try run(["192.168.1.20"]).settings == PresenceSettings(address: "192.168.1.20"))
+        #expect(try run(["192.168.1.20", "--client-id", "123456789012345678"]).settings
+            == PresenceSettings(address: "192.168.1.20", clientID: "123456789012345678"))
         // Options can be mixed in anywhere.
         let mixed = try run(["--verbose", "192.168.1.20", "--state", "Hi", "123456789012345678", "--port", "2"])
         #expect(mixed.settings.address == "192.168.1.20")
@@ -108,12 +135,13 @@ private func usageError(_ arguments: [String]) -> UsageError? {
     }
 
     @Test func positionalErrors() {
-        #expect(usageError(["192.168.1.20"]) == .invalid("missing <client-id> after '192.168.1.20'"))
         #expect(usageError(["a", "b", "c"]) == .invalid("unexpected argument 'c'"))
-        #expect(usageError(["--address", "1.2.3.4", "1.2.3.4", "1"])
-            == .invalid("--address can't be combined with a positional address and client ID"))
+        #expect(usageError(["--address", "1.2.3.4", "1.2.3.4"])
+            == .invalid("--address can't be combined with a positional address"))
+        #expect(usageError(["1.2.3.4", "--address", "1.2.3.4", "1"])
+            == .invalid("--address can't be combined with a positional address"))
         #expect(usageError(["1.2.3.4", "1", "--client-id", "2"])
-            == .invalid("--client-id can't be combined with a positional address and client ID"))
+            == .invalid("--client-id can't be combined with a positional client ID"))
     }
 
     @Test func repeatedOptionsKeepTheLastValue() throws {
@@ -132,7 +160,7 @@ private func usageError(_ arguments: [String]) -> UsageError? {
     }
 
     @Test func flagsRejectValues() {
-        for flag in ["--no-elapsed", "--hide-livearea", "--verbose", "--scan", "--help", "--version"] {
+        for flag in ["--no-artwork", "--no-elapsed", "--hide-livearea", "--verbose", "--scan", "--help", "--version"] {
             #expect(usageError(["\(flag)=1"]) == .invalid("\(flag) doesn't take a value"))
         }
     }
@@ -185,6 +213,7 @@ private func usageError(_ arguments: [String]) -> UsageError? {
             ["--scan", "--state", "x"]: "--state",
             ["--scan", "--interval", "5"]: "--interval",
             ["--scan", "--large-image", "k"]: "--large-image",
+            ["--scan", "--no-artwork"]: "--no-artwork",
             ["--scan", "--no-elapsed"]: "--no-elapsed",
             ["--scan", "--hide-livearea"]: "--hide-livearea",
             ["--scan", "--discord-socket", "/tmp/s"]: "--discord-socket",
@@ -198,9 +227,10 @@ private func usageError(_ arguments: [String]) -> UsageError? {
 
     @Test func settingsAreNotValidatedByTheParser() throws {
         // Address and client ID problems are reported from PresenceSettings.issues, after parsing.
-        let options = try run(["--verbose"])
-        #expect(options.settings.address.isEmpty)
-        #expect(options.settings.clientID.isEmpty)
-        #expect(try run(["--address", "not an address", "--client-id", "12"]).settings.address == "not an address")
+        let options = try run(["--address", "not an address", "--client-id", "12"])
+        #expect(options.settings.address == "not an address")
+        #expect(options.settings.clientID == "12")
+        #expect(options.settings.issues == [.invalidAddress, .invalidClientID])
+        #expect(try run(["scan"]).settings.issues == [.invalidAddress])
     }
 }

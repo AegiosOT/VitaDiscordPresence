@@ -32,6 +32,14 @@ struct VitaClientTests {
         #expect(server.connectionCount == 2)
     }
 
+    @Test func fetchesTheContentIDThatPlugin11Sends() async throws {
+        var title = persona
+        title.contentID = "UP0005-PCSE00120_00-PERSONA4GOLDEN01"
+        let server = try await MockVitaServer(behavior: .packet(title))
+        defer { server.stop() }
+        #expect(try await client(for: server).fetchTitle(from: "127.0.0.1") == title)
+    }
+
     @Test func acceptsA146BytePacket() async throws {
         let server = try await MockVitaServer(behavior: .raw(Array(VitaPacket.encode(persona).prefix(146))))
         defer { server.stop() }
@@ -199,6 +207,12 @@ struct VitaClientErrorMappingTests {
     func mapsPOSIXErrors(error: NWError, expected: VitaConnectionError) {
         #expect(VitaClient.connectionError(for: error, unsatisfiedReason: nil) == expected)
         #expect(VitaClient.connectionError(for: error, unsatisfiedReason: .notAvailable) == expected)
+    }
+
+    @Test func connectDeadlineReportsLocalNetworkDenial() {
+        #expect(VitaClient.connectDeadlineError(unsatisfiedReason: .localNetworkDenied) == .localNetworkDenied)
+        #expect(VitaClient.connectDeadlineError(unsatisfiedReason: nil) == .timedOut)
+        #expect(VitaClient.connectDeadlineError(unsatisfiedReason: .notAvailable) == .timedOut)
     }
 
     @Test(arguments: [NWError.posix(.EHOSTUNREACH), .posix(.ECONNREFUSED), .posix(.ENETDOWN), .dns(-65570)])

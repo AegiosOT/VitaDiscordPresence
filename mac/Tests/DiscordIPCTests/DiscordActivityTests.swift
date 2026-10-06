@@ -69,10 +69,24 @@ import Testing
         #expect(DiscordActivity(assets: .init(largeImage: "  vita\n")).sanitized().assets?.largeImage == "vita")
     }
 
-    @Test func sanitizedCutsTheImageTo300Units() throws {
-        let url = "https://example.com/" + String(repeating: "x", count: 400)
-        let image = DiscordActivity(assets: .init(largeImage: url)).sanitized().assets?.largeImage
-        #expect(image == String(url.prefix(300)))
+    @Test func sanitizedKeepsHTTPSImageURLsDiscordCanSign() {
+        let fits = "https://example.com/" + String(repeating: "x", count: 236) // 256 characters
+        #expect(DiscordActivity(assets: .init(largeImage: fits)).sanitized().assets?.largeImage == fits)
+    }
+
+    @Test(arguments: [
+        "https://example.com/" + String(repeating: "x", count: 237), // 257 characters
+        "http://example.com/vita.png",
+        "https://example.com/a b.png",
+    ])
+    func sanitizedDropsImageURLsDiscordCantSign(url: String) {
+        #expect(DiscordActivity(assets: .init(largeImage: url, largeText: "Vita")).sanitized().assets == nil)
+    }
+
+    @Test func sanitizedCutsAssetKeysTo300Units() throws {
+        let key = String(repeating: "x", count: 400)
+        let image = DiscordActivity(assets: .init(largeImage: key)).sanitized().assets?.largeImage
+        #expect(image == String(key.prefix(300)))
 
         let emoji = String(repeating: "\u{1F63A}", count: 200) // 400 UTF-16 units.
         let cut = try #require(DiscordActivity(assets: .init(largeImage: emoji)).sanitized().assets?.largeImage)

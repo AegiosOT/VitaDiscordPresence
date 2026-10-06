@@ -19,6 +19,8 @@ public struct PresenceSnapshot: Sendable, Equatable {
     public var lastSuccess: Date?
     /// The activity last accepted by Discord on the current connection (`nil` when cleared or unknown).
     public var publishedActivity: DiscordActivity?
+    /// The artwork found for `title` (`nil` while looking it up, when there is none, or when artwork is off).
+    public var artwork: URL?
 
     public init(
         isRunning: Bool = false,
@@ -28,7 +30,8 @@ public struct PresenceSnapshot: Sendable, Equatable {
         sessionStart: Date? = nil,
         host: String? = nil,
         lastSuccess: Date? = nil,
-        publishedActivity: DiscordActivity? = nil
+        publishedActivity: DiscordActivity? = nil,
+        artwork: URL? = nil
     ) {
         self.isRunning = isRunning
         self.vita = vita
@@ -38,6 +41,7 @@ public struct PresenceSnapshot: Sendable, Equatable {
         self.host = host
         self.lastSuccess = lastSuccess
         self.publishedActivity = publishedActivity
+        self.artwork = artwork
     }
 
     /// The stopped state.
@@ -50,7 +54,7 @@ public enum VitaStatus: Sendable, Equatable {
     case idle
     /// The settings can't be used; carries the first issue's message.
     case misconfigured(String)
-    /// Resolving a MAC address (ARP lookup or LAN scan).
+    /// Looking for the Vita: automatic discovery, or resolving a MAC address (ARP lookup or LAN scan).
     case resolving
     /// First poll in progress.
     case connecting

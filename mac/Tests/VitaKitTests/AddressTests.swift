@@ -134,11 +134,16 @@ struct VitaAddressTests {
         "fe80::1",
         "1.2.3.4\u{0}",
         "1.2.3.4\u{0}junk",
-        "",
-        "   ",
+        "autodetect",
     ])
     func rejectsInvalidInput(input: String) {
         #expect(VitaAddress(input) == nil)
+    }
+
+    @Test(arguments: ["", "   ", "\n", "auto", "Automatic", " AUTO "])
+    func emptyOrAutoMeansAutomatic(input: String) {
+        #expect(VitaAddress(input) == .automatic)
+        #expect(VitaAddress(input)?.description == "automatic")
     }
 
     @Test func descriptionIsTheNormalizedAddress() {

@@ -26,10 +26,18 @@ let package = Package(
         .target(name: "VitaKit"),
         // Discord Rich Presence over the local IPC socket.
         .target(name: "DiscordIPC"),
+        // Per-game artwork URLs from public sources (PlayStation Store, HexFlow-Covers, NeoVitaDB).
+        .target(name: "ArtworkKit", dependencies: ["VitaKit"]),
         // Settings, presence rules and the poll loop shared by the app and the CLI.
-        .target(name: "PresenceKit", dependencies: ["VitaKit", "DiscordIPC"]),
-        .executableTarget(name: "VitaPresenceApp", dependencies: ["PresenceKit", "VitaKit", "DiscordIPC"]),
-        .executableTarget(name: "VitaPresenceCLI", dependencies: ["PresenceKit", "VitaKit", "DiscordIPC"]),
+        .target(name: "PresenceKit", dependencies: ["VitaKit", "DiscordIPC", "ArtworkKit"]),
+        .executableTarget(
+            name: "VitaPresenceApp",
+            dependencies: ["PresenceKit", "VitaKit", "DiscordIPC", "ArtworkKit"]
+        ),
+        .executableTarget(
+            name: "VitaPresenceCLI",
+            dependencies: ["PresenceKit", "VitaKit", "DiscordIPC", "ArtworkKit"]
+        ),
 
         // Loopback mock servers (fake Vita plugin, fake Discord) shared by the test targets.
         .target(name: "TestSupport", dependencies: ["VitaKit", "DiscordIPC"], path: "Tests/TestSupport"),
@@ -44,20 +52,25 @@ let package = Package(
             swiftSettings: testSwiftSettings
         ),
         .testTarget(
+            name: "ArtworkKitTests",
+            dependencies: ["ArtworkKit", "VitaKit"],
+            swiftSettings: testSwiftSettings
+        ),
+        .testTarget(
             name: "PresenceKitTests",
-            dependencies: ["PresenceKit", "VitaKit", "DiscordIPC", "TestSupport"],
+            dependencies: ["PresenceKit", "VitaKit", "DiscordIPC", "ArtworkKit", "TestSupport"],
             swiftSettings: testSwiftSettings
         ),
         // The app and CLI targets are tested through `@testable import` with fakes; the CLI tests also run the
         // built `vitapresence-cli` against the loopback mocks. No LAN traffic, no GUI.
         .testTarget(
             name: "VitaPresenceAppTests",
-            dependencies: ["VitaPresenceApp", "PresenceKit", "VitaKit", "DiscordIPC"],
+            dependencies: ["VitaPresenceApp", "PresenceKit", "VitaKit", "DiscordIPC", "ArtworkKit"],
             swiftSettings: testSwiftSettings
         ),
         .testTarget(
             name: "VitaPresenceCLITests",
-            dependencies: ["VitaPresenceCLI", "PresenceKit", "VitaKit", "DiscordIPC", "TestSupport"],
+            dependencies: ["VitaPresenceCLI", "PresenceKit", "VitaKit", "DiscordIPC", "ArtworkKit", "TestSupport"],
             swiftSettings: testSwiftSettings
         ),
     ]

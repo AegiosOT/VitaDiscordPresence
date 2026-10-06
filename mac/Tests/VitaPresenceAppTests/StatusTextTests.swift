@@ -27,9 +27,19 @@ struct StatusTextTests {
     }
 
     @Test func unusableSettingsShowOnlyTheIssue() {
-        let snapshot = PresenceSnapshot(isRunning: true, vita: .misconfigured("Enter your Discord application ID"))
+        let message = PresenceSettings.Issue.invalidClientID.message
+        let snapshot = PresenceSnapshot(isRunning: true, vita: .misconfigured(message))
 
-        #expect(StatusText.lines(for: snapshot, now: start) == ["Enter your Discord application ID"])
+        #expect(StatusText.lines(for: snapshot, now: start) == [message])
+    }
+
+    @Test func lookingForTheVita() {
+        let snapshot = PresenceSnapshot(isRunning: true, vita: .resolving, discord: .connected(user))
+
+        #expect(StatusText.lines(for: snapshot, now: start) == [
+            "Vita: Looking for your Vita…",
+            "Discord: \(DiscordStatus.connected(user).summary)",
+        ])
     }
 
     @Test func runningShowsTheGameThenVitaThenDiscord() {

@@ -3,7 +3,8 @@ import PresenceKit
 import VitaKit
 
 /// Formats what `run` prints: time stamps, the startup line, and one status line per snapshot, such as
-/// `[12:01:03] Vita: Connected - Persona 4 Golden (PCSE00120) | Discord: Connected as Alex | Presence: shown`.
+/// `[12:01:03] Vita: Connected at 192.168.1.20 - Persona 4 Golden (PCSE00120) | Discord: Connected as Alex |
+/// Presence: shown`.
 struct StatusFormatter {
     /// Supplies the time zone of the time stamps.
     var calendar = Calendar.current
@@ -24,25 +25,45 @@ struct StatusFormatter {
             .joined(separator: ":")
     }
 
-    /// Printed once before the first status line.
+    /// Printed once before the first status line: the Vita's address (`automatic` when it is found on the
+    /// network), the Discord application (the custom ID, or `built-in (<id>)`) and the other choices made.
     func startup(_ options: RunOptions) -> String {
         let settings = options.settings
         let address = settings.vitaAddress?.description ?? settings.address
+        let application = settings.usesCustomClientID
+            ? settings.trimmedClientID
+            : "built-in (\(PresenceSettings.defaultClientID))"
         var line = "Starting \(CommandLineTool.name) \(CommandLineTool.version): Vita \(address) port \(options.port), "
-            + "Discord application \(settings.trimmedClientID), polling every \(Usage.seconds(settings.pollInterval)) s"
+            + "Discord application \(application), polling every \(Usage.seconds(settings.pollInterval)) s"
+        if !settings.showGameArtwork {
+            line += ", no game artwork"
+        }
         if let socket = options.discordSocket {
             line += ", Discord socket \(socket)"
         }
         return line + ". Press Ctrl-C to stop."
     }
 
-    /// The status line without its time stamp.
+    /// The status line without its time stamp. While the Vita answers, it says where, which matters most when
+    /// it is found automatically or by its MAC address. The presence is "shown with image" once it has a large
+    /// image (the game artwork, which arrives a moment after the text, or a custom image).
     func status(of snapshot: PresenceSnapshot) -> String {
         var vita = snapshot.vita.summary
+        if case .failing(.severalVitas(let hosts), _) = snapshot.vita {
+            let count = hosts.count == 1 ? "1 Vita" : "\(hosts.count) Vitas"
+            vita = "Found \(count): \(hosts.joined(separator: ", ")) — pass --address <ip>; see --scan"
+        }
+        if snapshot.vita == .connected, let host = snapshot.host {
+            vita += " at \(host)"
+        }
         if let title = snapshot.title {
             vita += " - " + Self.describe(title)
         }
-        let presence = snapshot.publishedActivity == nil ? "not shown" : "shown"
+        let presence = switch snapshot.publishedActivity {
+        case nil: "not shown"
+        case let activity? where activity.assets?.largeImage != nil: "shown with image"
+        case _?: "shown"
+        }
         return "Vita: \(vita) | Discord: \(snapshot.discord.summary) | Presence: \(presence)"
     }
 
@@ -60,6 +81,9 @@ struct StatusFormatter {
         }
         if let lastSuccess = snapshot.lastSuccess {
             facts.append("last answer \(clock(lastSuccess))")
+        }
+        if let artwork = snapshot.artwork {
+            facts.append("artwork \(artwork.absoluteString)")
         }
         return facts.joined(separator: ", ")
     }

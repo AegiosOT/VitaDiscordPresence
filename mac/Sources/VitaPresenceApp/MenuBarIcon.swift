@@ -30,7 +30,7 @@ enum MenuBarIcon: Equatable {
 
     private static func needsAttention(_ snapshot: PresenceSnapshot) -> Bool {
         switch snapshot.vita {
-        case .misconfigured, .failing(.localNetworkDenied, _): true
+        case .misconfigured, .failing(.localNetworkDenied, _), .failing(.severalVitas, _): true
         default: snapshot.discord == .unavailable(.invalidClientID)
         }
     }

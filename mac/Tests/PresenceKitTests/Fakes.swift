@@ -1,3 +1,4 @@
+import ArtworkKit
 import DiscordIPC
 import Foundation
 import VitaKit
@@ -9,6 +10,10 @@ let persona = VitaTitle(index: 3, titleID: "PCSE00120", name: "Persona 4 Golden"
 let gravityRush = VitaTitle(index: 5, titleID: "PCSA00011", name: "Gravity Rush")
 let testUser = DiscordUser(id: "42", username: "tester", globalName: "Tester")
 let validClientID = "123456789012345678"
+let personaArt = URL(string: "https://store.playstation.com/store/api/chihiro/00_09_000/container/US/en/19/"
+    + "UP0005-PCSE00120_00-PERSONA4GOLDEN01/1534563384000/image")!
+let gravityRushArt = URL(string: "https://raw.githubusercontent.com/Andiweli/HexFlow-Covers/main/Covers/PSVita/"
+    + "PCSA00011.png")!
 
 extension PresenceSettings {
     /// Usable settings: an IPv4 address and a well-formed client ID.
@@ -26,6 +31,7 @@ extension PresenceController.Configuration {
         configuration.activityWindow = .seconds(1)
         configuration.settingsDebounce = .milliseconds(60)
         configuration.invalidClientIDRetry = .seconds(60)
+        configuration.artworkGrace = .zero
         return configuration
     }
 }
@@ -177,13 +183,15 @@ actor FakeResolver: VitaHostResolving {
         if let error { throw error }
         switch address {
         case .ipv4(let host): return host
-        case .mac: return macHost
+        case .mac, .automatic: return macHost
         }
     }
 
     func invalidate(_ address: VitaAddress) {
         invalidated.append(address)
     }
+
+    func retryDiscovery() {}
 }
 
 // MARK: - Fake Discord
@@ -295,6 +303,62 @@ actor FakeDiscord: DiscordPresenceSink {
     var isConnected: Bool { connectedClientID != nil }
 }
 
+// MARK: - Fake artwork
+
+/// A scripted `ArtworkResolving` that never touches the network: it answers with the URL it was given for the
+/// title ID (`nil` when there is none), optionally after a delay, and logs every lookup.
+actor FakeArtwork: ArtworkResolving {
+    /// The title of every lookup, in the order they started.
+    private(set) var calls: [VitaTitle] = []
+    /// The title IDs of the lookups that returned, in order (cancelled ones included).
+    private(set) var answered: [String] = []
+    /// Lookups cut short because their task was cancelled. Like the real resolver, they return `nil`.
+    private(set) var cancelledCalls = 0
+    private let results: [String: URL]
+    private var delay: Duration?
+    private var heldTitleIDs: Set<String> = []
+
+    init(_ results: [String: URL] = [:], delay: Duration? = nil) {
+        self.results = results
+        self.delay = delay
+    }
+
+    /// The title IDs looked up, in order.
+    var lookedUp: [String] { calls.map(\.titleID) }
+
+    /// Makes every lookup take `delay`, unless its task is cancelled first.
+    func setDelay(_ delay: Duration?) {
+        self.delay = delay
+    }
+
+    /// Holds lookups for `titleID` until `release(_:)`, even if their task is cancelled meanwhile. Models a
+    /// resolver that ignores cancellation, so its result arrives late.
+    func hold(_ titleID: String) {
+        heldTitleIDs.insert(titleID)
+    }
+
+    func release(_ titleID: String) {
+        heldTitleIDs.remove(titleID)
+    }
+
+    func artwork(for title: VitaTitle) async -> URL? {
+        calls.append(title)
+        defer { answered.append(title.titleID) }
+        while heldTitleIDs.contains(title.titleID) {
+            await Task.detached { try? await Task.sleep(for: .milliseconds(2)) }.value
+        }
+        if let delay {
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                cancelledCalls += 1
+                return nil
+            }
+        }
+        return results[title.titleID]
+    }
+}
+
 // MARK: - Controller harness
 
 struct Harness {
@@ -302,13 +366,16 @@ struct Harness {
     let fetcher: FakeFetcher
     let resolver: FakeResolver
     let discord: FakeDiscord
+    let artwork: FakeArtwork
 }
 
-/// Runs `body` with a controller wired to fakes, and always stops the controller afterwards.
+/// Runs `body` with a controller wired to fakes, and always stops the controller afterwards. Unless a test
+/// passes its own `artwork`, no title has artwork.
 func withController(
     _ fetcher: FakeFetcher = FakeFetcher(.title(persona)),
     resolver: FakeResolver = FakeResolver(),
     discord: FakeDiscord = FakeDiscord(),
+    artwork: FakeArtwork = FakeArtwork(),
     configure: (inout PresenceController.Configuration) -> Void = { _ in },
     _ body: (Harness) async throws -> Void
 ) async throws {
@@ -318,9 +385,16 @@ func withController(
         fetcher: fetcher,
         resolver: resolver,
         discord: discord,
+        artwork: artwork,
         configuration: configuration
     )
-    let harness = Harness(controller: controller, fetcher: fetcher, resolver: resolver, discord: discord)
+    let harness = Harness(
+        controller: controller,
+        fetcher: fetcher,
+        resolver: resolver,
+        discord: discord,
+        artwork: artwork
+    )
     do {
         try await body(harness)
     } catch {

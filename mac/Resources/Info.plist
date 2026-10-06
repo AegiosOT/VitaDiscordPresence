@@ -33,6 +33,6 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>GPL-2.0. Based on VitaPresence by Electry.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>VitaPresence connects to your PS Vita on the local network to see which game you are playing.</string>
+	<string>VitaPresence finds your PS Vita on the local network and asks it which game you are playing.</string>
 </dict>
 </plist>

@@ -13,7 +13,6 @@ enum CommandLineTool {
             command = try CommandLineParser.parse(arguments)
         } catch {
             switch error {
-            case .noArguments: Console.error(Usage.synopsis)
             case .invalid(let message): Console.error("\(name): \(message)")
             }
             Console.error(Usage.hint)

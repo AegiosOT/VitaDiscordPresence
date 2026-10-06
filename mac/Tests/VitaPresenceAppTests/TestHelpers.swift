@@ -12,6 +12,7 @@ actor FakeController: PresenceControlling {
     enum Call: Equatable {
         case start(PresenceSettings)
         case update(PresenceSettings)
+        case remember(host: String?, macAddress: MACAddress?)
         case pollNow
         case stop
     }
@@ -33,6 +34,10 @@ actor FakeController: PresenceControlling {
 
     func updateSettings(_ settings: PresenceSettings) {
         calls.append(.update(settings))
+    }
+
+    func rememberVita(host: String?, macAddress: MACAddress?) {
+        calls.append(.remember(host: host, macAddress: macAddress))
     }
 
     func pollNow() {

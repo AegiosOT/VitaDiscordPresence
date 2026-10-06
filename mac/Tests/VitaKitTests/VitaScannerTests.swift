@@ -75,7 +75,7 @@ struct VitaScannerTests {
 
     @Test func emptyHostListProbesNothing() async throws {
         let fetcher = FakeFetcher { fakeTitle($0) }
-        #expect(try await scanner(fetcher).scan(hosts: []).isEmpty)
+        await #expect(throws: VitaConnectionError.noLocalNetwork) { try await scanner(fetcher).scan(hosts: []) }
         #expect(fetcher.calls.isEmpty)
     }
 

@@ -2,25 +2,29 @@
 ///
 /// Wire format (little-endian, no framing, the client sends nothing):
 ///
-/// | offset | size | field                                                  |
-/// |-------:|-----:|--------------------------------------------------------|
-/// | 0      | 4    | magic `0xCAFECAFE` (bytes `FE CA FE CA`)               |
-/// | 4      | 4    | index (int32): 0 = LiveArea, 1...20 = app slot + 1     |
-/// | 8      | 10   | title ID, NUL-terminated inside the field              |
-/// | 18     | 128  | title (UTF-8), NUL-terminated except in one SFO path   |
-/// | 146    | 2    | ARM EABI tail padding, always zero                     |
+/// | offset | size | field                                                       |
+/// |-------:|-----:|-------------------------------------------------------------|
+/// | 0      | 4    | magic `0xCAFECAFE` (bytes `FE CA FE CA`)                    |
+/// | 4      | 4    | index (int32): 0 = LiveArea, 1...20 = app slot + 1          |
+/// | 8      | 10   | title ID, NUL-terminated inside the field                   |
+/// | 18     | 128  | title (UTF-8), NUL-terminated except in one SFO path        |
+/// | 146    | 37   | content ID (plugin 1.1 and later), NUL-terminated, or empty |
+/// | 183    | 1    | ARM EABI tail padding, always zero                          |
 ///
-/// The plugin sends 148 bytes and then closes the connection. Bytes after the first NUL in a string field
-/// are stale data from earlier packets and must be ignored.
+/// Plugin 1.1 sends 184 bytes and then closes the connection. Earlier plugins end after the title with two
+/// bytes of zero tail padding (148 bytes), so their packets carry no content ID. Bytes after the first NUL in
+/// a string field are stale data from earlier packets and must be ignored.
 public enum VitaPacket {
     /// TCP port the plugin listens on (0xCAFE).
     public static let port: UInt16 = 0xCAFE
     /// Value of the first four bytes of every packet.
     public static let magic: UInt32 = 0xCAFE_CAFE
-    /// Bytes covered by the fields. Anything shorter is invalid.
+    /// Bytes covered by the fields every plugin sends. Anything shorter is invalid.
     public static let minimumLength = 146
-    /// What the plugin actually sends: `sizeof(vitapresence_data_t)` including two bytes of tail padding.
+    /// What plugins before 1.1 send: `sizeof(vitapresence_data_t)` including two bytes of tail padding.
     public static let wireLength = 148
+    /// What plugin 1.1 sends: the content ID field and one byte of tail padding follow the title.
+    public static let wireLengthWithContentID = 184
     /// Upper bound a client reads before giving up (guards against some other service on the port).
     public static let maximumReadLength = 4096
     /// Largest valid `index` (the plugin scans 20 app slots).
@@ -28,33 +32,51 @@ public enum VitaPacket {
 
     private static let titleIDField = 8..<18
     private static let titleField = 18..<146
+    private static let contentIDField = 146..<183
+    /// The only content ID shape accepted: `-` and `_` stand for themselves, every letter stands for an
+    /// uppercase ASCII letter or a digit.
+    private static let contentIDShape = Array("XXYYYY-TTTTNNNNN_NN-LLLLLLLLLLLLLLLL".utf8)
 
     /// Parses a packet. Accepts any length of at least 146 bytes and ignores trailing bytes.
     ///
     /// String fields are cut at the first NUL (or the end of the field). An incomplete trailing UTF-8
     /// sequence is dropped, other invalid UTF-8 becomes U+FFFD, C0 control characters and DEL are removed,
-    /// and surrounding whitespace is trimmed. For LiveArea packets (index 0) both strings are returned empty,
-    /// whatever the fields contain.
+    /// and surrounding whitespace is trimmed. For LiveArea packets (index 0) both strings are returned empty
+    /// and the content ID `nil`, whatever the fields contain.
+    ///
+    /// The content ID is read only when at least 183 bytes arrived. It is cut at the first NUL and kept only
+    /// when it has exactly the shape `XXYYYY-TTTTNNNNN_NN-LLLLLLLLLLLLLLLL`: 36 characters, `-` at offsets 6
+    /// and 19, `_` at 16, and ASCII letters or digits everywhere else. Letters may be either case; the value
+    /// is returned in uppercase. Anything else gives `nil`.
     public static func parse(_ bytes: some Collection<UInt8>) throws(VitaPacketError) -> VitaTitle {
-        let packet = Array(bytes.prefix(minimumLength))
-        guard packet.count == minimumLength else { throw .tooShort(byteCount: packet.count) }
+        let packet = Array(bytes.prefix(contentIDField.upperBound))
+        guard packet.count >= minimumLength else { throw .tooShort(byteCount: packet.count) }
         let receivedMagic = littleEndianUInt32(in: packet, at: 0)
         guard receivedMagic == magic else { throw .badMagic(receivedMagic) }
         let index = Int32(bitPattern: littleEndianUInt32(in: packet, at: 4))
         guard (0...maximumIndex).contains(index) else { throw .invalidIndex(index) }
         guard index != 0 else { return .liveArea }
-        return VitaTitle(index: index, titleID: text(in: packet[titleIDField]), name: text(in: packet[titleField]))
+        return VitaTitle(
+            index: index,
+            titleID: text(in: packet[titleIDField]),
+            name: text(in: packet[titleField]),
+            contentID: packet.count == contentIDField.upperBound ? contentID(in: packet[contentIDField]) : nil
+        )
     }
 
-    /// Encodes `title` exactly as the plugin would: 148 bytes with zero padding. Used by tests and mock
-    /// servers. Strings longer than their field are cut to 9 bytes (title ID) or 127 bytes (title) without
-    /// splitting a UTF-8 sequence, and are NUL-terminated.
+    /// Encodes `title` exactly as the plugin would, with zero padding: 148 bytes like plugins before 1.1, or
+    /// 184 bytes like plugin 1.1 when `title.contentID` isn't `nil`. Used by tests and mock servers. Strings
+    /// longer than their field are cut to 9 bytes (title ID), 127 bytes (title) or 36 bytes (content ID)
+    /// without splitting a UTF-8 sequence, and are NUL-terminated.
     public static func encode(_ title: VitaTitle, magic: UInt32 = VitaPacket.magic) -> [UInt8] {
-        var packet = [UInt8](repeating: 0, count: wireLength)
+        var packet = [UInt8](repeating: 0, count: title.contentID == nil ? wireLength : wireLengthWithContentID)
         packet.replaceSubrange(0..<4, with: littleEndianBytes(magic))
         packet.replaceSubrange(4..<8, with: littleEndianBytes(UInt32(bitPattern: title.index)))
         write(title.titleID, into: &packet, field: titleIDField)
         write(title.name, into: &packet, field: titleField)
+        if let contentID = title.contentID {
+            write(contentID, into: &packet, field: contentIDField)
+        }
         return packet
     }
 
@@ -75,6 +97,27 @@ public enum VitaPacket {
         var printable = ""
         printable.unicodeScalars.append(contentsOf: scalars.filter { $0.value >= 0x20 && $0.value != 0x7F })
         return String(printable.trimmingWhitespace())
+    }
+
+    /// The content ID in `field` up to the first NUL, or `nil` unless it has exactly `contentIDShape`.
+    private static func contentID(in field: ArraySlice<UInt8>) -> String? {
+        let id = field.prefix(while: { $0 != 0 })
+        guard id.count == contentIDShape.count,
+              zip(id, contentIDShape).allSatisfy({ byte, shape in
+                  isUppercaseLetterOrDigit(shape) ? isLetterOrDigit(byte) : byte == shape
+              })
+        else { return nil }
+        return String(decoding: id, as: UTF8.self).uppercased()
+    }
+
+    private static func isUppercaseLetterOrDigit(_ byte: UInt8) -> Bool {
+        isLetterOrDigit(byte) && !((UInt8(ascii: "a")...UInt8(ascii: "z")).contains(byte))
+    }
+
+    private static func isLetterOrDigit(_ byte: UInt8) -> Bool {
+        (UInt8(ascii: "A")...UInt8(ascii: "Z")).contains(byte)
+            || (UInt8(ascii: "a")...UInt8(ascii: "z")).contains(byte)
+            || (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
     }
 
     /// The number of bytes at the end of `bytes` that start a well-formed UTF-8 sequence but stop before its

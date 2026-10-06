@@ -14,9 +14,14 @@ public enum VitaConnectionError: Error, Equatable, Sendable {
     case incompletePacket(byteCount: Int)
     /// Data arrived, but it isn't a VitaPresence packet.
     case invalidPacket(VitaPacketError)
-    /// The configured address can't be used: not a valid IPv4 or MAC address, or a MAC address that couldn't
-    /// be resolved to an IP. Carries a user-facing explanation.
+    /// The configured address can't be used: not a valid IPv4 or MAC address, a MAC address that couldn't be
+    /// resolved to an IP, or automatic discovery that found no Vita. Carries a user-facing explanation.
     case unresolvedAddress(String)
+    /// Automatic discovery found other Vitas and will not switch to them: several Vitas, or one Vita that is
+    /// not the one it already knows. `hosts` are the addresses that answered, numerically sorted.
+    case severalVitas([String])
+    /// This Mac has no IPv4 network a scan can probe. It is not "no Vita answered".
+    case noLocalNetwork
     /// Any other failure. Carries a diagnostic description.
     case other(String)
 
@@ -24,12 +29,17 @@ public enum VitaConnectionError: Error, Equatable, Sendable {
     /// "Vita not responding. Is it awake and on the same Wi-Fi?".
     public var userMessage: String {
         switch self {
-        case .timedOut: "Vita not responding. Is it awake and on the same Wi-Fi?"
-        case .refused: "Found the Vita, but the VitaPresence plugin isn't running"
-        case .localNetworkDenied: "Local Network access is turned off for VitaPresence"
-        case .unreachable(let detail): "Can't reach the Vita (\(detail))"
-        case .incompletePacket, .invalidPacket: "Unexpected reply. Is this the right device?"
-        case .unresolvedAddress(let message), .other(let message): message
+        case .timedOut: return "Vita not responding. Is it awake and on the same Wi-Fi?"
+        case .refused: return "Found the Vita, but the VitaPresence plugin isn't running"
+        case .localNetworkDenied: return "Local Network access is turned off for VitaPresence"
+        case .unreachable(let detail): return "Can't reach the Vita (\(detail))"
+        case .incompletePacket, .invalidPacket: return "Unexpected reply. Is this the right device?"
+        case .unresolvedAddress(let message), .other(let message): return message
+        case .severalVitas(let hosts):
+            let list = hosts.joined(separator: ", ")
+            let count = hosts.count == 1 ? "1 Vita" : "\(hosts.count) Vitas"
+            return "Found \(count): \(list) — set its address"
+        case .noLocalNetwork: return "This Mac isn't on a network VitaPresence can scan"
         }
     }
 }

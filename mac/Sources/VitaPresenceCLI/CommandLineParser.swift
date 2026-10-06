@@ -25,22 +25,21 @@ struct RunOptions: Equatable {
 
 /// Why the arguments can't be used.
 enum UsageError: Error, Equatable {
-    /// No arguments at all: show the synopsis.
-    case noArguments
     /// A user-facing explanation, such as "unknown option '--foo'".
     case invalid(String)
 }
 
 /// Hand-written parser for the options in `Usage.help`.
 ///
-/// A value follows its option (`--state Busy`) or is attached with `=` (`--state=--busy--`). A separate value
-/// can't start with `--`, so a forgotten value is reported instead of swallowing the next option. A repeated
-/// option keeps its last value. `--help` and `--version` take effect as soon as they are reached. Only the
-/// syntax, the numeric ranges and the socket path length are checked here; the address and client ID are
-/// validated by `PresenceSettings.issues`.
+/// No arguments mean `run` with the defaults: the Vita is found automatically and the built-in Discord
+/// application is used. The address and the client ID can also be given as the first and second positional
+/// argument, in the order of the Windows client. A value follows its option (`--state Busy`) or is attached
+/// with `=` (`--state=--busy--`). A separate value can't start with `--`, so a forgotten value is reported
+/// instead of swallowing the next option. A repeated option keeps its last value. `--help` and `--version`
+/// take effect as soon as they are reached. Only the syntax, the numeric ranges and the socket path length
+/// are checked here; the address and client ID are validated by `PresenceSettings.issues`.
 enum CommandLineParser {
     static func parse(_ arguments: [String]) throws(UsageError) -> Command {
-        guard !arguments.isEmpty else { throw .noArguments }
         var options = RunOptions()
         var scan = false
         var given: [Option] = []
@@ -81,6 +80,7 @@ enum CommandLineParser {
             case .clientID: options.settings.clientID = value
             case .state: options.settings.stateText = value
             case .largeImage: options.settings.largeImageKey = value
+            case .noArtwork: options.settings.showGameArtwork = false
             case .interval: options.settings.pollInterval = try pollInterval(from: value)
             case .noElapsed: options.settings.showElapsedTime = false
             case .hideLiveArea: options.settings.showLiveArea = false
@@ -98,13 +98,17 @@ enum CommandLineParser {
             if let extra = positionals.first { throw .invalid("unexpected argument '\(extra)'") }
             return .scan(port: options.port)
         }
-        if !positionals.isEmpty {
-            if let other = given.first(where: { $0 == .address || $0 == .clientID }) {
-                throw .invalid("\(other.rawValue) can't be combined with a positional address and client ID")
+        guard positionals.count <= 2 else { throw .invalid("unexpected argument '\(positionals[2])'") }
+        if let address = positionals.first {
+            guard !given.contains(.address) else {
+                throw .invalid("--address can't be combined with a positional address")
             }
-            guard positionals.count >= 2 else { throw .invalid("missing <client-id> after '\(positionals[0])'") }
-            guard positionals.count == 2 else { throw .invalid("unexpected argument '\(positionals[2])'") }
-            options.settings.address = positionals[0]
+            options.settings.address = address
+        }
+        if positionals.count == 2 {
+            guard !given.contains(.clientID) else {
+                throw .invalid("--client-id can't be combined with a positional client ID")
+            }
             options.settings.clientID = positionals[1]
         }
         return .run(options)
@@ -146,6 +150,7 @@ private enum Option: String {
     case state = "--state"
     case interval = "--interval"
     case largeImage = "--large-image"
+    case noArtwork = "--no-artwork"
     case noElapsed = "--no-elapsed"
     case hideLiveArea = "--hide-livearea"
     case port = "--port"
@@ -158,7 +163,7 @@ private enum Option: String {
     var takesValue: Bool {
         switch self {
         case .address, .clientID, .state, .interval, .largeImage, .port, .discordSocket: true
-        case .noElapsed, .hideLiveArea, .verbose, .scan, .help, .version: false
+        case .noArtwork, .noElapsed, .hideLiveArea, .verbose, .scan, .help, .version: false
         }
     }
 }

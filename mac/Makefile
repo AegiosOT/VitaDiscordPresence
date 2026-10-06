@@ -7,6 +7,14 @@ BUILD_DIR ?= $(HOME)/Library/Caches/io.github.aegiosot.VitaPresence
 SWIFT_FLAGS := --scratch-path "$(BUILD_DIR)/swiftpm"
 BUILD_APP := VITAPRESENCE_BUILD_DIR="$(BUILD_DIR)" scripts/build-app.sh
 
+# Liquid Glass and SwiftUI's @State macro ship with Xcode, not the Command Line Tools. Swift itself lives in
+# the default toolchain. Use that Xcode for this build without changing the selected developer directory.
+XCODE_DEVELOPER := /Applications/Xcode.app/Contents/Developer
+XCODE_SWIFT := $(XCODE_DEVELOPER)/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift
+ifneq ($(wildcard $(XCODE_SWIFT)),)
+export DEVELOPER_DIR := $(XCODE_DEVELOPER)
+endif
+
 .PHONY: build test app app-arm64 cli install run zip clean mock-vita help
 
 build: ## Debug build of the app and the CLI

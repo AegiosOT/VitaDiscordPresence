@@ -14,8 +14,11 @@ import VitaKit
 
             let snapshot = await h.controller.snapshot
             let start = try #require(snapshot.sessionStart)
-            let sent = try #require(await h.discord.acceptedActivities.first ?? nil)
-            #expect(sent.details == "Persona 4 Golden")
+            let sent = try #require(await h.discord.acceptedActivities.last ?? nil)
+            #expect(sent.type == 0)
+            #expect(sent.name == "Persona 4 Golden")
+            #expect(sent.details == "PlayStation Vita")
+            #expect(sent.assets == nil, "the default fake artwork has none")
             #expect(sent.timestamps?.start == milliseconds(start))
             #expect(snapshot.publishedActivity == sent)
             #expect(snapshot.isRunning)
@@ -33,7 +36,7 @@ import VitaKit
         try await withController { h in
             await h.controller.start(with: .valid)
             #expect(await eventually { await h.fetcher.callCount >= 6 })
-            #expect(await h.discord.attempts.count == 1)
+            #expect(await h.discord.attempts.count == 1, "the game, and nothing while Discord was still closed")
             #expect(await h.discord.connectAttempts.count == 1)
         }
     }
@@ -42,17 +45,17 @@ import VitaKit
         let fetcher = FakeFetcher(.title(persona))
         try await withController(fetcher) { h in
             await h.controller.start(with: .valid)
-            #expect(await eventually { await h.controller.snapshot.publishedActivity?.details == persona.name })
+            #expect(await eventually { await h.controller.snapshot.publishedActivity?.name == persona.name })
             let firstStart = try #require(await h.controller.snapshot.sessionStart)
 
             try await Task.sleep(for: .milliseconds(5))
             await fetcher.setSteps(.title(gravityRush))
-            #expect(await eventually { await h.controller.snapshot.publishedActivity?.details == gravityRush.name })
+            #expect(await eventually { await h.controller.snapshot.publishedActivity?.name == gravityRush.name })
 
             let secondStart = try #require(await h.controller.snapshot.sessionStart)
             #expect(secondStart > firstStart)
             let sent = await h.discord.acceptedActivities
-            #expect(sent.map { $0?.details } == [persona.name, gravityRush.name])
+            #expect(sent.map { $0?.name } == [persona.name, gravityRush.name])
             #expect(sent.last??.timestamps?.start == milliseconds(secondStart))
         }
     }
@@ -66,7 +69,7 @@ import VitaKit
 
             let renamed = VitaTitle(index: 7, titleID: persona.titleID, name: "Persona 4 Golden (EU)")
             await fetcher.setSteps(.title(renamed))
-            #expect(await eventually { await h.controller.snapshot.publishedActivity?.details == renamed.name })
+            #expect(await eventually { await h.controller.snapshot.publishedActivity?.name == renamed.name })
             #expect(await h.controller.snapshot.sessionStart == start)
         }
     }
@@ -78,6 +81,7 @@ import VitaKit
             let snapshot = await h.controller.snapshot
             let start = try #require(snapshot.sessionStart)
             #expect(snapshot.title == .liveArea)
+            #expect(snapshot.publishedActivity?.name == "PlayStation Vita")
             #expect(snapshot.publishedActivity?.details == "In the LiveArea")
             #expect(snapshot.publishedActivity?.timestamps?.start == milliseconds(start))
         }
@@ -92,7 +96,7 @@ import VitaKit
 
             try await Task.sleep(for: .milliseconds(5))
             await fetcher.setSteps(.title(persona))
-            #expect(await eventually { await h.controller.snapshot.publishedActivity?.details == persona.name })
+            #expect(await eventually { await h.controller.snapshot.publishedActivity?.name == persona.name })
             let gameStart = try #require(await h.controller.snapshot.sessionStart)
             #expect(gameStart > liveAreaStart)
         }
@@ -110,7 +114,7 @@ import VitaKit
             let failing = await h.controller.snapshot
             #expect(failing.vita == .failing(.refused, failures: 1))
             #expect(failing.title == persona)
-            #expect(failing.publishedActivity?.details == persona.name)
+            #expect(failing.publishedActivity?.name == persona.name)
             #expect(await h.discord.attempts.count == 1)
 
             await fetcher.resume()
@@ -132,14 +136,15 @@ import VitaKit
             #expect(afterTwo.title == persona)
             #expect(await h.discord.acceptedActivities.count == 1)
 
-            // The third failure clears it.
+            // The third failure drops the Discord connection, which removes the application's name.
             await fetcher.resume()
-            #expect(await eventually { await h.discord.acceptedActivities.last == .some(nil) })
+            #expect(await eventually { await h.discord.disconnects == 1 })
             let cleared = await h.controller.snapshot
             #expect(cleared.title == nil)
             #expect(cleared.publishedActivity == nil)
+            #expect(cleared.discord == .idle)
             #expect(cleared.vita == .failing(.timedOut, failures: 3))
-            #expect(await h.discord.acceptedActivities.map { $0?.details } == [persona.name, nil])
+            #expect(await h.discord.acceptedActivities.map { $0?.name } == [persona.name])
         }
     }
 
@@ -151,8 +156,9 @@ import VitaKit
             let start = try #require(await h.controller.snapshot.sessionStart)
 
             await fetcher.setSteps(.failure(.timedOut))
-            #expect(await eventually { await h.discord.acceptedActivities.last == .some(nil) })
-            #expect(await h.controller.snapshot.title == nil)
+            #expect(await eventually { await h.controller.snapshot.title == nil })
+            #expect(await h.discord.disconnects == 1)
+            #expect(await h.controller.snapshot.discord == .idle)
 
             await fetcher.setSteps(.title(persona))
             #expect(await eventually { await h.controller.snapshot.publishedActivity != nil })
@@ -276,6 +282,99 @@ import VitaKit
         }
     }
 
+    // MARK: Automatic address
+
+    @Test func defaultSettingsFindTheVitaAndUseTheBuiltInApplication() async throws {
+        let resolver = FakeResolver(macHost: "192.168.1.77")
+        try await withController(resolver: resolver) { h in
+            await h.controller.start(with: PresenceSettings())
+            #expect(await eventually { await h.controller.snapshot.publishedActivity?.name == persona.name })
+            let snapshot = await h.controller.snapshot
+            #expect(snapshot.vita == .connected)
+            #expect(snapshot.host == "192.168.1.77")
+            #expect(await resolver.resolved.first == .automatic)
+            #expect(await h.fetcher.calls.first?.host == "192.168.1.77")
+            #expect(await h.discord.connectAttempts == [PresenceSettings.defaultClientID])
+        }
+    }
+
+    @Test func automaticAddressStartsByLookingForTheVita() async throws {
+        let resolver = FakeResolver()
+        let error = VitaConnectionError.unresolvedAddress("No Vita found on this network")
+        await resolver.fail(with: error)
+        await resolver.setDelay(.milliseconds(300))
+        let fetcher = FakeFetcher(.title(persona))
+        try await withController(fetcher, resolver: resolver, configure: { $0.pollIntervalOverride = .seconds(30) }) { h in
+            await h.controller.start(with: PresenceSettings(clientID: validClientID))
+            #expect(await h.controller.snapshot.vita == .resolving)
+            #expect(await h.controller.snapshot.vita.summary == "Looking for your Vita\u{2026}")
+            #expect(await eventually { await resolver.resolved == [.automatic] })
+            #expect(await eventually { await h.controller.snapshot.vita == .failing(error, failures: 1) })
+            #expect(await eventually { await resolver.invalidated == [.automatic] })
+            #expect(await fetcher.callCount == 0)
+            #expect(await h.controller.snapshot.host == nil)
+            // No handshake while the Vita is missing, so Discord never shows the application's name.
+            #expect(await h.discord.connectAttempts.isEmpty)
+            #expect(await h.discord.acceptedActivities.isEmpty)
+            #expect(await h.controller.snapshot.publishedActivity == nil)
+            #expect(await h.controller.snapshot.discord == .idle)
+
+            await resolver.fail(with: nil)
+            await h.controller.pollNow()
+            #expect(await eventually { await h.controller.snapshot.publishedActivity?.name == persona.name })
+            #expect(await h.discord.acceptedActivities.map { $0?.name } == [persona.name])
+        }
+    }
+
+    @Test func automaticAddressIsInvalidatedAfterEveryFailure() async throws {
+        let fetcher = FakeFetcher(.failure(.timedOut))
+        let resolver = FakeResolver(macHost: "192.168.1.77")
+        try await withController(fetcher, resolver: resolver) { h in
+            await h.controller.start(with: PresenceSettings(clientID: validClientID))
+            #expect(await eventually { await resolver.invalidated.count >= 2 })
+            #expect(await resolver.invalidated.allSatisfy { $0 == .automatic })
+            #expect(await fetcher.calls.allSatisfy { $0.host == "192.168.1.77" })
+            guard case .failing(.timedOut, let failures) = await h.controller.snapshot.vita else {
+                Issue.record("expected a failing Vita")
+                return
+            }
+            #expect(failures >= 2)
+        }
+    }
+
+    @Test func switchingToAutomaticLooksForTheVitaAgain() async throws {
+        let resolver = FakeResolver(macHost: "192.168.1.77")
+        try await withController(resolver: resolver, configure: { $0.pollIntervalOverride = .seconds(30) }) { h in
+            await h.controller.start(with: .valid)
+            #expect(await eventually { await h.controller.snapshot.publishedActivity != nil })
+
+            await resolver.setDelay(.milliseconds(200))
+            var settings = PresenceSettings.valid
+            settings.address = ""
+            await h.controller.updateSettings(settings)
+            let resolving = await h.controller.snapshot
+            #expect(resolving.vita == .resolving)
+            #expect(resolving.title == nil)
+            #expect(resolving.host == nil)
+            #expect(await eventually { await h.controller.snapshot.host == "192.168.1.77" })
+            #expect(await eventually { await h.controller.snapshot.vita == .connected })
+            #expect(await resolver.invalidated.isEmpty, "an IPv4 address has nothing to invalidate")
+        }
+    }
+
+    @Test func leavingAutomaticDiscoveryInvalidatesIt() async throws {
+        let resolver = FakeResolver()
+        try await withController(resolver: resolver, configure: { $0.pollIntervalOverride = .seconds(30) }) { h in
+            await h.controller.start(with: PresenceSettings(clientID: validClientID))
+            #expect(await eventually { await h.controller.snapshot.publishedActivity != nil })
+            #expect(await resolver.invalidated.isEmpty)
+
+            await h.controller.updateSettings(.valid)
+            #expect(await eventually { await resolver.invalidated == [.automatic] })
+            #expect(await eventually { await h.fetcher.calls.last?.host == "192.168.1.20" })
+        }
+    }
+
     // MARK: Discord
 
     @Test func discordReconnectResendsTheActivity() async throws {
@@ -322,7 +421,7 @@ import VitaKit
     @Test func droppedConnectionDuringASendReconnectsAndResends() async throws {
         let fetcher = FakeFetcher(.title(persona))
         let discord = FakeDiscord()
-        await discord.reject { $0?.details == gravityRush.name ? .io("Broken pipe") : nil }
+        await discord.reject { $0?.name == gravityRush.name ? .io("Broken pipe") : nil }
         try await withController(fetcher, discord: discord) { h in
             await h.controller.start(with: .valid)
             #expect(await eventually { await h.controller.snapshot.publishedActivity != nil })
@@ -330,7 +429,7 @@ import VitaKit
             await fetcher.setSteps(.title(gravityRush))
             #expect(await eventually { await discord.connectAttempts.count >= 2 })
             await discord.reject { _ in nil }
-            #expect(await eventually { await h.controller.snapshot.publishedActivity?.details == gravityRush.name })
+            #expect(await eventually { await h.controller.snapshot.publishedActivity?.name == gravityRush.name })
             #expect(await h.controller.snapshot.discord == .connected(testUser))
         }
     }
@@ -339,7 +438,7 @@ import VitaKit
         let fetcher = FakeFetcher(.title(persona))
         let discord = FakeDiscord()
         let rejection = DiscordIPCError.rpcError(code: 4000, message: "child \"activity\" fails")
-        await discord.reject { $0?.details == persona.name ? rejection : nil }
+        await discord.reject { $0?.name == persona.name ? rejection : nil }
         try await withController(fetcher, discord: discord) { h in
             await h.controller.start(with: .valid)
             #expect(await eventually { await h.controller.snapshot.discord == .unavailable(rejection) })
@@ -348,7 +447,7 @@ import VitaKit
             #expect(await discord.connectAttempts.count == 1, "a rejection keeps the connection")
 
             await fetcher.setSteps(.title(gravityRush))
-            #expect(await eventually { await h.controller.snapshot.publishedActivity?.details == gravityRush.name })
+            #expect(await eventually { await h.controller.snapshot.publishedActivity?.name == gravityRush.name })
             #expect(await h.controller.snapshot.discord == .connected(testUser))
             #expect(await discord.attempts.count == 2)
         }
@@ -370,14 +469,14 @@ import VitaKit
             await h.controller.updateSettings(settings)
             #expect(await eventually { await h.controller.snapshot.discord == .connected(testUser) })
             #expect(await discord.connectAttempts == [validClientID, "987654321098765432"])
-            #expect(await eventually { await h.controller.snapshot.publishedActivity?.details == persona.name })
+            #expect(await eventually { await h.controller.snapshot.publishedActivity?.name == persona.name })
         }
     }
 
     @Test func rejectedPayloadIsRetriedForANewClientID() async throws {
         let discord = FakeDiscord()
         let rejection = DiscordIPCError.rpcError(code: 4000, message: "child \"activity\" fails")
-        await discord.reject { $0?.details == persona.name ? rejection : nil }
+        await discord.reject { $0?.name == persona.name ? rejection : nil }
         try await withController(discord: discord) { h in
             await h.controller.start(with: .valid)
             #expect(await eventually { await h.controller.snapshot.discord == .unavailable(rejection) })
@@ -415,7 +514,7 @@ import VitaKit
             #expect(await discord.attempts.isEmpty)
 
             await discord.failConnects(with: nil)
-            #expect(await eventually { await h.controller.snapshot.publishedActivity?.details == persona.name })
+            #expect(await eventually { await h.controller.snapshot.publishedActivity?.name == persona.name })
             #expect(await h.controller.snapshot.discord == .connected(testUser))
         }
     }
@@ -461,11 +560,11 @@ import VitaKit
             $0.activityWindow = .milliseconds(600)
         }) { h in
             await h.controller.start(with: .valid)
-            #expect(await eventually { await h.discord.acceptedActivities.last??.details == "Game 6" })
+            #expect(await eventually { await h.discord.acceptedActivities.last??.name == "Game 6" })
             #expect(await stays(for: .milliseconds(100)) { await h.discord.accepted.count == 3 })
 
             let sent = await h.discord.accepted
-            #expect(sent.map { $0.activity?.details } == ["Game 1", "Game 2", "Game 6"])
+            #expect(sent.map { $0.activity?.name } == ["Game 1", "Game 2", "Game 6"])
             for (earlier, later) in zip(sent, sent.dropFirst(2)) {
                 #expect(later.at - earlier.at >= .milliseconds(590), "at most activityBurst sends per activityWindow")
             }
@@ -496,7 +595,8 @@ import VitaKit
             #expect(snapshot.sessionStart == nil)
             #expect(snapshot.lastSuccess == nil)
             #expect(snapshot.host == "192.168.1.21")
-            #expect(await eventually { await h.discord.acceptedActivities.last == .some(nil) })
+            #expect(await eventually { await h.discord.disconnects == 1 })
+            #expect(await h.discord.acceptedActivities.last??.name == persona.name)
         }
     }
 
@@ -563,7 +663,7 @@ import VitaKit
             #expect(await eventually { await h.controller.snapshot.title == gravityRush })
             // The first poll's result arrives late and must not win.
             #expect(await stays(for: .milliseconds(400)) { await h.controller.snapshot.title == gravityRush })
-            #expect(await h.discord.attempts.allSatisfy { $0?.details != persona.name })
+            #expect(await h.discord.attempts.allSatisfy { $0?.name != persona.name })
         }
     }
 
@@ -593,7 +693,8 @@ import VitaKit
             await h.controller.updateSettings(settings)
             #expect(await eventually { await h.controller.snapshot.publishedActivity != nil })
             #expect(await discord.connectAttempts.count == 1, "the new loop waited for the same connect")
-            #expect(await h.fetcher.calls.allSatisfy { $0.host == "192.168.1.21" })
+            #expect(await h.fetcher.calls.first?.host == "192.168.1.20", "the poll that started the connect")
+            #expect(await h.fetcher.calls.dropFirst().allSatisfy { $0.host == "192.168.1.21" })
         }
     }
 
@@ -613,7 +714,7 @@ import VitaKit
 
             let resync = try #require(await h.discord.accepted.last)
             #expect(resync.activity?.state == "Play")
-            #expect(resync.activity?.details == persona.name)
+            #expect(resync.activity?.name == persona.name)
             #expect(resync.at >= changed + .milliseconds(150))
             #expect(await h.discord.connectAttempts.count == 1)
             #expect(await h.controller.snapshot.publishedActivity?.state == "Play")
@@ -628,18 +729,20 @@ import VitaKit
             var settings = PresenceSettings.valid
             settings.showLiveArea = false
             await h.controller.updateSettings(settings)
-            #expect(await eventually { await h.discord.acceptedActivities.last == .some(nil) })
+            #expect(await eventually { await h.discord.disconnects == 1 })
             #expect(await h.controller.snapshot.publishedActivity == nil)
+            #expect(await h.controller.snapshot.discord == .idle)
             #expect(await h.controller.snapshot.title == .liveArea)
+            #expect(await h.discord.acceptedActivities.last??.details == "In the LiveArea")
         }
     }
 
     @Test func misconfiguredSettingsDontPollUntilFixed() async throws {
         try await withController { h in
-            await h.controller.start(with: PresenceSettings())
+            await h.controller.start(with: PresenceSettings(address: "nope"))
             let snapshot = await h.controller.snapshot
             #expect(snapshot.isRunning)
-            #expect(snapshot.vita == .misconfigured("Enter your Vita's IP or MAC address"))
+            #expect(snapshot.vita == .misconfigured("That isn't a valid IP or MAC address"))
             #expect(snapshot.discord == .idle)
             #expect(await stays(for: .milliseconds(150)) { await h.fetcher.callCount == 0 })
             await h.controller.pollNow()
@@ -647,7 +750,7 @@ import VitaKit
             #expect(await h.discord.connectAttempts.isEmpty)
 
             await h.controller.updateSettings(.valid)
-            #expect(await eventually { await h.controller.snapshot.publishedActivity?.details == persona.name })
+            #expect(await eventually { await h.controller.snapshot.publishedActivity?.name == persona.name })
             #expect(await h.controller.snapshot.vita == .connected)
         }
     }
@@ -788,7 +891,7 @@ import VitaKit
             #expect(await eventually { await h.controller.snapshot.publishedActivity != nil })
             #expect(await h.discord.connectAttempts.count == 2)
             #expect(await h.discord.disconnects == 1)
-            #expect(await h.discord.acceptedActivities.map { $0?.details } == [persona.name, persona.name])
+            #expect(await h.discord.acceptedActivities.map { $0?.name } == [persona.name, persona.name])
         }
     }
 
@@ -803,7 +906,7 @@ import VitaKit
             #expect(await eventually { await collector.all.first == .idle })
 
             await h.controller.start(with: .valid)
-            #expect(await eventually { await collector.all.last?.publishedActivity?.details == persona.name })
+            #expect(await eventually { await collector.all.last?.publishedActivity?.name == persona.name })
             #expect(await collector.all.contains { $0.isRunning && $0.discord == .connected(testUser) })
             // Later ticks change nothing but the time of the last answer, and must not repeat a snapshot.
             #expect(await eventually { await h.fetcher.callCount >= 8 })

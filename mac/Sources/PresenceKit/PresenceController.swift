@@ -1,3 +1,4 @@
+import ArtworkKit
 import DiscordIPC
 import Foundation
 import VitaKit
@@ -6,25 +7,38 @@ import VitaKit
 /// publishes `PresenceSnapshot`s.
 ///
 /// Behaviour:
-/// - **Loop:** while running, each tick (1) connects to Discord if needed (after `.invalidClientID`, it
-///   doesn't retry until the client ID changes or `invalidClientIDRetry` passes), (2) resolves the address,
-///   (3) fetches the title, (4) computes the desired activity with `PresenceBuilder`, and (5) syncs it. Ticks
-///   are `settings.effectivePollInterval` apart while the Vita answers. After failures they back off
+/// - **Loop:** while running, each tick (1) resolves the address, (2) fetches the title, (3) computes the
+///   desired activity with `PresenceBuilder`, and (4) opens Discord only when that activity exists and syncs
+///   it. A handshake by itself makes Discord show the application's name, so Discord stays closed while the
+///   Vita is being looked for and is closed again when there is nothing to show. After `.invalidClientID`,
+///   Discord isn't retried until the client ID changes or `invalidClientIDRetry` passes. Ticks are
+///   `settings.effectivePollInterval` apart while the Vita answers. After failures they back off
 ///   exponentially from `minimumRetryDelay` to `maximumRetryDelay`, never faster than the poll interval
 ///   would be.
 /// - **Sessions:** a session starts (sessionStart = now) when the first title arrives or
 ///   `VitaTitle.sessionKey` changes. If the Vita has been unreachable for `sessionResetAfter`, the session is
 ///   forgotten, so the next title starts a new one. "No previous title" is `nil`, never `""`, so the first
 ///   LiveArea packet starts a session.
-/// - **Failures:** a single failed poll keeps the presence. After `clearAfterFailures` consecutive failures
-///   the title becomes `nil` and the presence is cleared. A MAC address is invalidated in the resolver after
-///   every failure.
+/// - **Failures:** a single failed poll keeps the presence and the Discord connection. After
+///   `clearAfterFailures` consecutive failures the title becomes `nil` and Discord is disconnected, which
+///   drops the application's name. An automatic or MAC address starts out `.resolving` and is invalidated
+///   in the resolver after every failure.
+/// - **Artwork:** when the title changes (or `showGameArtwork` is turned on), one lookup for its artwork
+///   starts in the background. The sync waits up to `artworkGrace` for that lookup so a quick one is sent
+///   once, text and image together; a slower lookup sends the text when the grace ends and the image when it
+///   arrives. A miss (`nil`) is tried again after `artworkRetryInterval` while that title is current. Hits are
+///   kept until `stop()`. A lookup is abandoned, and its result ignored, when the title changes or goes away,
+///   artwork is turned off, a custom image is set, or the controller stops. The LiveArea and system apps are
+///   never looked up, and nothing is looked up while `showGameArtwork` is off or a custom image is set.
 /// - **Discord sync:** sends only when the desired activity differs from what was last accepted on the
 ///   current connection, and always after a (re)connect: each READY resets "last accepted" to unknown.
-///   Rate-limited by a `TokenBucket` (`activityBurst` per `activityWindow`); while limited, only the newest
-///   desired activity is sent once a token is free. A payload rejected with `.rpcError` isn't retried until
-///   the desired activity changes. `.notConnected`, `.timedOut`, `.io` and `.closedByDiscord` mark Discord
-///   as disconnected; the next tick reconnects.
+///   Rate-limited by a `SlidingWindowLimiter` (`activityBurst` sends in any `activityWindow`); while limited,
+///   only the newest desired activity is sent once a slot is free. Nothing to show (no title, or the LiveArea
+///   while it is hidden) closes Discord instead of sending a clear: a clear leaves the application's name up.
+///   A payload rejected with `.rpcError` isn't retried until the desired activity changes, except an https
+///   image: that update is sent again at once without its images, and the images are tried again after
+///   `remoteImageRetry`. `.notConnected`, `.timedOut`, `.io` and `.closedByDiscord` mark Discord as
+///   disconnected; the next tick reconnects when there is still an activity to show.
 /// - **Settings changes:** a different client ID disconnects Discord and reconnects immediately. A different
 ///   address resets the resolver, failure count, title and session, then polls immediately; a Discord
 ///   connection attempt in progress carries on. Presentation-only changes (state text, image, toggles)
@@ -42,9 +56,15 @@ public actor PresenceController {
         /// Backoff bounds after failed polls.
         public var minimumRetryDelay: Duration = .seconds(5)
         public var maximumRetryDelay: Duration = .seconds(30)
-        /// Discord activity rate limit: at most `activityBurst` updates per `activityWindow`.
+        /// Discord activity rate limit: at most `activityBurst` updates in any `activityWindow`.
         public var activityBurst: Int = 5
         public var activityWindow: Duration = .seconds(20)
+        /// How long a game switch waits for artwork before sending the text alone. `0` sends the text at once.
+        public var artworkGrace: Duration = .milliseconds(1500)
+        /// How long a miss is remembered before the same title is looked up again.
+        public var artworkRetryInterval: Duration = .seconds(600)
+        /// How long to leave https images off after Discord rejects an update that carried them.
+        public var remoteImageRetry: Duration = .seconds(60)
         /// Delay before re-syncing after a presentation-only settings change, so typing doesn't spam Discord.
         public var settingsDebounce: Duration = .milliseconds(750)
         /// How long to wait before retrying a client ID Discord rejected.
@@ -63,6 +83,8 @@ public actor PresenceController {
     private let fetcher: any VitaTitleFetching
     private let resolver: any VitaHostResolving
     private let discord: any DiscordPresenceSink
+    /// Looks up the running game's artwork for the large image.
+    private let artwork: any ArtworkResolving
     private let configuration: Configuration
 
     /// How long `stop()` waits for Discord to be cleared and disconnected before returning anyway.
@@ -116,7 +138,9 @@ public actor PresenceController {
     /// The connection attempt in progress. It outlives the loop that started it, so a loop that replaces it
     /// (after an address change) waits for the same attempt; only `disconnectDiscord` abandons it.
     private var connectAttempt: Task<DiscordUser, any Error>?
-    private var activityBucket: TokenBucket
+    private var activityLimiter: SlidingWindowLimiter
+    /// Until this instant, https images are left off an update Discord rejected.
+    private var remoteImageRetryAt: ContinuousClock.Instant?
     /// The one task that sends activities: it waits out the settings debounce and the rate limit, then sends
     /// the newest desired activity until Discord shows it.
     private var syncTask: Task<Void, Never>?
@@ -124,23 +148,40 @@ public actor PresenceController {
     /// overlap on the sink.
     private var discordLifecycle: Task<Void, Never>?
 
+    // MARK: Artwork state
+
+    /// Lookups finished during this run, by title.
+    private var artworkResults: [ArtworkKey: ArtworkRecord] = [:]
+    /// While set, a sync waits until this instant or until the lookup in progress finishes.
+    private var artworkGraceDeadline: ContinuousClock.Instant?
+    /// Wakes a sync that is waiting out `artworkGrace`.
+    private var graceWaiter: CheckedContinuation<Void, Never>?
+    /// Invalidates a grace timer that a newer lookup or a finished one has replaced.
+    private var graceGeneration = 0
+    /// The lookup in progress, if any.
+    private var artworkLookup: ArtworkLookup?
+    /// Identifies the latest lookup. It changes whenever a lookup is started or abandoned, so a result that
+    /// arrives after its lookup was abandoned is ignored.
+    private var artworkGeneration = 0
+
     private var lastPublished = PresenceSnapshot.idle
 
     public init(
         fetcher: any VitaTitleFetching = VitaClient(),
         resolver: any VitaHostResolving = VitaResolver(),
         discord: any DiscordPresenceSink = DiscordIPCClient(),
+        artwork: any ArtworkResolving = ArtworkResolver(),
         configuration: Configuration = Configuration()
     ) {
         (snapshots, snapshotContinuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
         self.fetcher = fetcher
         self.resolver = resolver
         self.discord = discord
+        self.artwork = artwork
         self.configuration = configuration
-        activityBucket = TokenBucket(
-            capacity: configuration.activityBurst,
-            refillInterval: configuration.activityWindow,
-            now: .now
+        activityLimiter = SlidingWindowLimiter(
+            limit: configuration.activityBurst,
+            window: configuration.activityWindow
         )
         snapshotContinuation.yield(.idle)
     }
@@ -159,18 +200,20 @@ public actor PresenceController {
             sessionStart: sessionStart,
             host: host,
             lastSuccess: lastSuccess,
-            publishedActivity: acceptedActivity ?? nil
+            publishedActivity: acceptedActivity ?? nil,
+            artwork: currentArtwork
         )
     }
 
     /// Starts the loop. If the settings have `issues`, publishes `.misconfigured` and doesn't poll (it stays
     /// "running" so `updateSettings` can fix it). Calling `start` again while running behaves like
     /// `updateSettings`.
-    public func start(with settings: PresenceSettings) {
+    public func start(with settings: PresenceSettings) async {
         guard !isRunning else {
             updateSettings(settings)
             return
         }
+        await resolver.retryDiscovery()
         isRunning = true
         self.settings = settings
         applyPresentationNow()
@@ -180,6 +223,12 @@ public actor PresenceController {
             activate()
         }
         publish()
+    }
+
+    /// Points automatic discovery at a saved Vita. The next poll uses `host`, and a scan can follow
+    /// `macAddress` after that host stops answering.
+    public func rememberVita(host: String?, macAddress: MACAddress?) async {
+        await resolver.remember(host: host, macAddress: macAddress)
     }
 
     /// Applies new settings while running, or just stores them while stopped. See the type documentation.
@@ -201,13 +250,13 @@ public actor PresenceController {
             return
         }
 
-        let clientIDChanged = settings.trimmedClientID != old.trimmedClientID
+        let clientIDChanged = settings.effectiveClientID != old.effectiveClientID
         let addressChanged = settings.vitaAddress != old.vitaAddress
         if clientIDChanged {
             disconnectDiscord(status: .connecting)
         }
         if addressChanged {
-            if let oldAddress = old.vitaAddress, case .mac = oldAddress {
+            if let oldAddress = old.vitaAddress, oldAddress.needsResolving {
                 Task { [resolver] in await resolver.invalidate(oldAddress) }
             }
             resetVita(status: initialVitaStatus)
@@ -216,17 +265,24 @@ public actor PresenceController {
             presentationDeadline = .now + configuration.settingsDebounce
             requestSync()
         }
+        if desiredActivity == nil, discordUser == nil, connectAttempt == nil, discordStatus == .connecting {
+            // A client-ID change marks Discord as connecting before this. With nothing to show, that
+            // connection is not started.
+            discordStatus = .idle
+        }
         if clientIDChanged || addressChanged {
             restartLoop()
         } else if settings.effectivePollInterval != old.effectivePollInterval {
             wake()
         }
+        updateArtworkLookup()
         publish()
     }
 
     /// Polls right away (for example after the Mac wakes or the network changes). No-op when stopped.
-    public func pollNow() {
+    public func pollNow() async {
         guard loopTask != nil else { return }
+        await resolver.retryDiscovery()
         wake()
     }
 
@@ -236,6 +292,7 @@ public actor PresenceController {
             isRunning = false
             deactivate()
             resetVita(status: .idle)
+            artworkResults.removeAll()
             publish()
         }
         // Also covers a second `stop()` racing the first one: both return once Discord is cleared.
@@ -249,7 +306,6 @@ public actor PresenceController {
     /// Starts polling with the current settings, which have no issues.
     private func activate() {
         resetVita(status: initialVitaStatus)
-        discordStatus = .connecting
         restartLoop()
     }
 
@@ -281,8 +337,10 @@ public actor PresenceController {
         presentationDeadline = nil
     }
 
+    /// `.resolving` ("Looking for your Vita…") until an automatic or MAC address is resolved, otherwise
+    /// `.connecting`.
     private var initialVitaStatus: VitaStatus {
-        if case .mac? = settings.vitaAddress { return .resolving }
+        if settings.vitaAddress?.needsResolving == true { return .resolving }
         return .connecting
     }
 
@@ -310,15 +368,53 @@ public actor PresenceController {
     }
 
     private func tick() async {
-        await connectDiscordIfNeeded()
-        guard !Task.isCancelled else { return }
+        // A dropped socket is noticed before the poll, so putting the game back does not wait on a fetch.
+        // The first handshake still waits: there is nothing to show until a poll has succeeded.
+        if await discordDroppedWhileShowing() {
+            await reflectDiscord()
+            guard !Task.isCancelled else { return }
+        }
         await pollVita()
+        guard !Task.isCancelled else { return }
+        await reflectDiscord()
+    }
+
+    /// True when Discord was showing a title and the socket has since closed.
+    private func discordDroppedWhileShowing() async -> Bool {
+        guard desiredActivity != nil, discordUser != nil else { return false }
+        return await !discord.isConnected
+    }
+
+    /// Opens Discord and publishes the activity when there is one to show. Closes it otherwise, so a
+    /// handshake never leaves the application's name up on its own.
+    private func reflectDiscord() async {
+        guard desiredActivity != nil else {
+            dropDiscordIfOpen()
+            return
+        }
+        // A quick artwork lookup can ride along with the first update. Waiting before the handshake keeps
+        // Discord from showing the application's name during that pause.
+        await pauseForArtworkGrace()
+        guard !Task.isCancelled, desiredActivity != nil else {
+            dropDiscordIfOpen()
+            return
+        }
+        await connectDiscordIfNeeded()
         guard !Task.isCancelled else { return }
         requestSync()
     }
 
-    /// Tick step 1: notices a dropped connection and makes at most one connection attempt, or waits for the
-    /// one already in progress.
+    /// Closes an established Discord connection when there is nothing to show. A handshake that has not
+    /// finished is left running: an address change can still use it, and it has not shown the application's
+    /// name yet.
+    private func dropDiscordIfOpen() {
+        guard discordUser != nil else { return }
+        disconnectDiscord(status: .idle)
+        publish()
+    }
+
+    /// Notices a dropped connection and makes at most one connection attempt, or waits for the one already
+    /// in progress. Called only when there is an activity to send.
     private func connectDiscordIfNeeded() async {
         if discordUser != nil {
             let generation = connectionGeneration
@@ -332,7 +428,9 @@ public actor PresenceController {
             attempt = connectAttempt
         } else {
             if let retryAt = invalidClientIDRetryAt, ContinuousClock.now < retryAt { return }
-            attempt = enqueueConnect(clientID: settings.trimmedClientID)
+            discordStatus = .connecting
+            publish()
+            attempt = enqueueConnect(clientID: settings.effectiveClientID)
             connectAttempt = attempt
         }
         let generation = connectionGeneration
@@ -344,8 +442,8 @@ public actor PresenceController {
         case .success(let user):
             discordUser = user
             discordStatus = .connected(user)
-            // Restore the presence right away instead of after this tick's poll.
-            if title != nil { requestSync() }
+            // The handshake shows the application's name until the activity arrives, so publish it now.
+            requestSync()
         case .failure(let error):
             let error = error as? DiscordIPCError ?? .io(String(describing: error))
             if error == .invalidClientID {
@@ -393,6 +491,7 @@ public actor PresenceController {
         title = newTitle
         lastSuccess = Date()
         vitaStatus = .connected
+        updateArtworkLookup()
         publish()
     }
 
@@ -403,11 +502,12 @@ public actor PresenceController {
         forgetSessionIfExpired(now: now)
         if consecutiveFailures >= configuration.clearAfterFailures {
             title = nil
+            updateArtworkLookup()
         }
         let error = error as? VitaConnectionError ?? .other(String(describing: error))
         vitaStatus = .failing(error, failures: consecutiveFailures)
         publish()
-        if case .mac = address {
+        if address.needsResolving {
             await resolver.invalidate(address)
         }
     }
@@ -427,6 +527,7 @@ public actor PresenceController {
         lastSuccess = nil
         consecutiveFailures = 0
         failingSince = nil
+        updateArtworkLookup()
     }
 
     // MARK: Discord connection
@@ -456,11 +557,21 @@ public actor PresenceController {
     }
 
     /// Forgets the connection on purpose, abandons a connection attempt in progress, and disconnects in the
-    /// background.
-    private func disconnectDiscord(status: DiscordStatus) {
+    /// background. `cancelSync` is false when the running sync itself decided there is nothing to show, so
+    /// it can finish without cancelling itself.
+    private func disconnectDiscord(status: DiscordStatus, cancelSync: Bool = true) {
         connectAttempt?.cancel()
         connectAttempt = nil
-        forgetConnection(status: status)
+        if cancelSync {
+            forgetConnection(status: status)
+        } else {
+            connectionGeneration += 1
+            discordUser = nil
+            acceptedActivity = .none
+            remoteImageRetryAt = nil
+            discordStatus = status
+            syncTask = nil
+        }
         rejectedActivity = .none
         invalidClientIDRetryAt = nil
         enqueueTeardown()
@@ -474,18 +585,32 @@ public actor PresenceController {
         syncTask = nil
         discordUser = nil
         acceptedActivity = .none
+        remoteImageRetryAt = nil
         discordStatus = status
     }
 
     // MARK: Discord sync
 
     private var desiredActivity: DiscordActivity? {
-        title.flatMap { PresenceBuilder.activity(for: $0, settings: presentation, sessionStart: sessionStart) }
+        guard let title else { return nil }
+        let activity = PresenceBuilder.activity(
+            for: title,
+            settings: presentation,
+            sessionStart: sessionStart,
+            artwork: currentArtwork
+        )
+        if let retryAt = remoteImageRetryAt, ContinuousClock.now < retryAt {
+            return Self.strippingRemoteImages(activity)
+        }
+        return activity
     }
 
-    /// Tick step 5, and after anything else that can change the desired activity.
+    /// After anything that can change the desired activity. Also runs while Discord is closed when a pending
+    /// presentation change may produce an activity, so turning the LiveArea back on reconnects.
     private func requestSync() {
-        guard syncTask == nil, discordUser != nil else { return }
+        guard syncTask == nil else { return }
+        guard discordUser != nil || connectAttempt != nil || presentationDeadline != nil || desiredActivity != nil
+        else { return }
         let generation = connectionGeneration
         syncTask = Task { await self.runSync(generation: generation) }
     }
@@ -501,9 +626,28 @@ public actor PresenceController {
                 presentation = settings
                 presentationDeadline = nil
             }
+            await pauseForArtworkGrace()
+            guard !Task.isCancelled, generation == connectionGeneration else { return }
             let desired = desiredActivity
+            if desired == nil {
+                // A nil activity would leave the application's name on screen. Closing the socket drops it.
+                if discordUser != nil {
+                    disconnectDiscord(status: .idle, cancelSync: false)
+                    publish()
+                } else if !Task.isCancelled {
+                    syncTask = nil
+                }
+                return
+            }
+            if discordUser == nil {
+                await connectDiscordIfNeeded()
+                guard !Task.isCancelled, generation == connectionGeneration, discordUser != nil else {
+                    if !Task.isCancelled { syncTask = nil }
+                    return
+                }
+            }
             if acceptedActivity == .some(desired) || rejectedActivity == .some(desired) { break }
-            if let wait = activityBucket.consume(now: now) {
+            if let wait = activityLimiter.consume(now: ContinuousClock.now) {
                 try? await Task.sleep(for: wait)
                 continue
             }
@@ -516,6 +660,11 @@ public actor PresenceController {
             } catch {
                 guard !Task.isCancelled, generation == connectionGeneration else { return }
                 let error = error as? DiscordIPCError ?? .io(String(describing: error))
+                if case .rpcError = error, Self.hasRemoteImage(desired) {
+                    // The picture was refused. Show the game at once without it, and try the picture later.
+                    remoteImageRetryAt = .now + configuration.remoteImageRetry
+                    continue
+                }
                 if case .rpcError = error {
                     rejectedActivity = .some(desired)
                     discordStatus = .unavailable(error)
@@ -527,6 +676,120 @@ public actor PresenceController {
         }
         // A cancelled sync was already replaced; only a finished one clears its own slot.
         if !Task.isCancelled { syncTask = nil }
+    }
+
+    // MARK: Artwork
+
+    /// What the current title's artwork is looked up and kept by, or `nil` when it needs none: no title, the
+    /// LiveArea, a system app, artwork turned off, or a custom image (which replaces the lookup).
+    private var artworkKey: ArtworkKey? {
+        guard let title, settings.showGameArtwork, settings.largeImageKey.isBlank else { return nil }
+        switch title.kind {
+        case .liveArea, .systemApp: return nil
+        case .adrenalineMenu, .vitaGame, .pspGame, .ps1Game, .other:
+            return ArtworkKey(titleID: title.titleID, contentID: title.contentID)
+        }
+    }
+
+    /// The current title's artwork, once its lookup has found one.
+    private var currentArtwork: URL? {
+        guard let key = artworkKey, let record = artworkResults[key] else { return nil }
+        return record.url
+    }
+
+    /// `true` when `key` has no result worth keeping: nothing remembered, or a miss older than
+    /// `artworkRetryInterval`.
+    private func needsLookup(_ key: ArtworkKey) -> Bool {
+        guard let record = artworkResults[key] else { return true }
+        guard record.url == nil else { return false }
+        return ContinuousClock.now - record.checkedAt >= configuration.artworkRetryInterval
+    }
+
+    /// Starts looking up the current title's artwork when it is needed and not known yet, and abandons a
+    /// lookup that is no longer needed. Called after every change to the title or the settings.
+    private func updateArtworkLookup() {
+        let key = artworkKey
+        guard key != artworkLookup?.key else { return }
+        artworkLookup?.task.cancel()
+        artworkLookup = nil
+        artworkGeneration += 1
+        guard let key, let title, needsLookup(key) else {
+            artworkGraceDeadline = nil
+            endArtworkGraceWait()
+            return
+        }
+        if configuration.artworkGrace > .zero {
+            artworkGraceDeadline = ContinuousClock.now + configuration.artworkGrace
+        } else {
+            artworkGraceDeadline = nil
+        }
+        endArtworkGraceWait()
+        let generation = artworkGeneration
+        let task = Task {
+            let url = await self.artwork.artwork(for: title)
+            self.finishArtworkLookup(generation: generation, key: key, url: url)
+        }
+        artworkLookup = ArtworkLookup(key: key, task: task)
+    }
+
+    /// Keeps a lookup's result and shows it, unless the lookup was abandoned meanwhile.
+    private func finishArtworkLookup(generation: Int, key: ArtworkKey, url: URL?) {
+        guard generation == artworkGeneration else { return }
+        artworkLookup = nil
+        artworkGraceDeadline = nil
+        artworkResults[key] = ArtworkRecord(url: url, checkedAt: .now)
+        endArtworkGraceWait()
+        publish()
+        requestSync()
+    }
+
+    /// Holds the sync until the artwork lookup finishes or `artworkGrace` runs out, so a quick lookup is sent
+    /// once. Returns immediately when nothing is being waited for.
+    private func pauseForArtworkGrace() async {
+        guard let deadline = artworkGraceDeadline, artworkLookup != nil, ContinuousClock.now < deadline else { return }
+        graceGeneration += 1
+        let generation = graceGeneration
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            graceWaiter = continuation
+            Task {
+                try? await Task.sleep(until: deadline, clock: .continuous)
+                self.artworkGraceExpired(generation: generation)
+            }
+        }
+    }
+
+    private func artworkGraceExpired(generation: Int) {
+        guard generation == graceGeneration else { return }
+        artworkGraceDeadline = nil
+        endArtworkGraceWait()
+    }
+
+    /// Resumes a sync waiting on artwork grace. A later grace timer from the wait that was resumed is ignored.
+    private func endArtworkGraceWait() {
+        graceGeneration += 1
+        graceWaiter?.resume()
+        graceWaiter = nil
+    }
+
+    /// `true` when `activity` carries an https image Discord has to fetch.
+    private static func hasRemoteImage(_ activity: DiscordActivity?) -> Bool {
+        let images = [activity?.assets?.largeImage, activity?.assets?.smallImage]
+        return images.contains { $0?.lowercased().hasPrefix("https://") == true }
+    }
+
+    /// `activity` with its https images removed. Asset keys are kept.
+    private static func strippingRemoteImages(_ activity: DiscordActivity?) -> DiscordActivity? {
+        guard var activity, var assets = activity.assets else { return activity }
+        if assets.largeImage?.lowercased().hasPrefix("https://") == true {
+            assets.largeImage = nil
+            assets.largeText = nil
+        }
+        if assets.smallImage?.lowercased().hasPrefix("https://") == true {
+            assets.smallImage = nil
+            assets.smallText = nil
+        }
+        activity.assets = assets.largeImage == nil && assets.smallImage == nil ? nil : assets
+        return activity
     }
 
     // MARK: Publishing
@@ -555,6 +818,24 @@ public actor PresenceController {
     }
 }
 
+/// A finished artwork lookup.
+private struct ArtworkRecord {
+    var url: URL?
+    var checkedAt: ContinuousClock.Instant
+}
+
+/// What artwork is looked up and kept by; the resolver caches it by the same two IDs.
+private struct ArtworkKey: Hashable {
+    var titleID: String
+    var contentID: String?
+}
+
+/// An artwork lookup in progress.
+private struct ArtworkLookup {
+    var key: ArtworkKey
+    var task: Task<Void, Never>
+}
+
 private extension PresenceSettings {
     /// `true` when both settings build the same activity from the same title.
     func presentsLike(_ other: PresenceSettings) -> Bool {
@@ -562,5 +843,14 @@ private extension PresenceSettings {
             && largeImageKey == other.largeImageKey
             && showElapsedTime == other.showElapsedTime
             && showLiveArea == other.showLiveArea
+            && showGameArtwork == other.showGameArtwork
+    }
+}
+
+private extension VitaAddress {
+    /// `true` for addresses the resolver has to look up (found automatically, or by MAC address).
+    var needsResolving: Bool {
+        if case .ipv4 = self { return false }
+        return true
     }
 }

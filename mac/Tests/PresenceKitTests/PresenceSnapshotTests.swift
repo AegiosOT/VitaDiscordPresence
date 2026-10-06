@@ -10,7 +10,7 @@ import VitaKit
         #expect(idle.vita == .idle)
         #expect(idle.discord == .idle)
         #expect(idle.title == nil && idle.sessionStart == nil && idle.host == nil)
-        #expect(idle.lastSuccess == nil && idle.publishedActivity == nil)
+        #expect(idle.lastSuccess == nil && idle.publishedActivity == nil && idle.artwork == nil)
     }
 
     @Test func vitaSummaries() {

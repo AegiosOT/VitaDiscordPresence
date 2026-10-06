@@ -45,9 +45,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         content.sizingOptions = [.minSize]
         let window = EditingWindow(contentViewController: content)
         window.title = "VitaPresence Settings"
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
+        window.toolbarStyle = .unified
         window.isReleasedWhenClosed = false
-        window.setContentSize(NSSize(width: 520, height: 680))
+        window.setContentSize(NSSize(width: 760, height: 560))
         window.center()
         window.setFrameAutosaveName("Settings")
         window.delegate = self

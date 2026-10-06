@@ -38,7 +38,8 @@ enum ScanCommand {
         return EXIT_SUCCESS
     }
 
-    /// A scanner probing `port` with the short timeouts a LAN sweep needs. `run` resolves MAC addresses with it.
+    /// A scanner probing `port` with the short timeouts a LAN sweep needs. `run` finds the Vita with it, when
+    /// the address is automatic or a MAC address.
     static func scanner(port: UInt16) -> VitaScanner {
         VitaScanner(fetcher: VitaClient(port: port, connectTimeout: .milliseconds(800), readTimeout: .seconds(2)))
     }

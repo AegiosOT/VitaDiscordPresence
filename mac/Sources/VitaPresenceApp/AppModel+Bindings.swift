@@ -35,6 +35,19 @@ extension AppModel {
         Binding(get: { self.connectOnLaunch }, set: { self.setConnectOnLaunch($0) })
     }
 
+    /// "Use my own Discord application": shows the application ID field; turning it off clears the ID.
+    var ownDiscordApplicationBinding: Binding<Bool> {
+        Binding(get: { self.usesOwnDiscordApplication }, set: { self.setUsesOwnDiscordApplication($0) })
+    }
+
+    /// A profile's name. Typing is saved as it happens; a blank name is shown as "PS Vita".
+    func profileNameBinding(_ id: UUID) -> Binding<String> {
+        Binding(
+            get: { self.profiles.first { $0.id == id }?.name ?? "" },
+            set: { self.renameProfile(id, to: $0) }
+        )
+    }
+
     /// On only while launch at login is fully enabled; turning it on may ask for approval instead.
     var launchAtLoginBinding: Binding<Bool> {
         Binding(get: { self.launchAtLogin == .enabled }, set: { self.setLaunchAtLogin($0) })

@@ -27,8 +27,10 @@ public struct VitaScanner: Sendable {
     /// The MAC address of a host that answered. Tests replace it with a fake ARP cache.
     let macAddressLookup: @Sendable (String) -> MACAddress?
 
+    /// `fetcher` uses the same timeouts as a direct poll. A shorter connect timeout misses a Vita whose
+    /// Wi-Fi is slow to answer, and can expire before Local Network denial is reported.
     public init(
-        fetcher: any VitaTitleFetching = VitaClient(connectTimeout: .milliseconds(800), readTimeout: .seconds(2)),
+        fetcher: any VitaTitleFetching = VitaClient(),
         maxConcurrentProbes: Int = 48,
         hostLimit: Int = 1024
     ) {
@@ -66,6 +68,8 @@ public struct VitaScanner: Sendable {
     public func scan(hosts: [String]? = nil) async throws -> [DiscoveredVita] {
         var seen = Set<String>()
         let candidates = (hosts ?? localHosts()).filter { seen.insert($0).inserted }
+        // No interfaces to probe is not the same as a scan that looked and found nothing.
+        guard !candidates.isEmpty else { throw VitaConnectionError.noLocalNetwork }
         let found = try await withThrowingTaskGroup(of: DiscoveredVita?.self) { group in
             var pending = candidates.makeIterator()
             for _ in 0..<max(maxConcurrentProbes, 1) {

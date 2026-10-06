@@ -1,16 +1,18 @@
+import DiscordIPC
 import Foundation
 import VitaKit
 
 /// Everything the user configures. Shared by the app (persisted in UserDefaults) and the CLI (from
-/// arguments).
+/// arguments). The defaults work out of the box: the Vita is found automatically and the built-in Discord
+/// application is used.
 public struct PresenceSettings: Sendable, Equatable, Codable {
-    /// The Vita's IPv4 address or MAC address, as typed.
+    /// The Vita's IPv4 address or MAC address, as typed. Empty (or `auto`) means find it automatically.
     public var address: String
-    /// The Discord application (client) ID from the Developer Portal.
+    /// A custom Discord application (client) ID. Empty means the built-in `defaultClientID`.
     public var clientID: String
     /// Optional custom second line ("state") under the game name.
     public var stateText: String
-    /// Optional Discord asset key or https image URL for the large image.
+    /// Optional Discord asset key or https image URL that replaces the automatic game artwork.
     public var largeImageKey: String
     /// Seconds between polls when the Vita is answering. Clamped to `pollIntervalRange` when used.
     public var pollInterval: Double
@@ -19,9 +21,13 @@ public struct PresenceSettings: Sendable, Equatable, Codable {
     /// When `false`, the presence is cleared while the Vita is in the LiveArea instead of showing
     /// "In the LiveArea".
     public var showLiveArea: Bool
+    /// Look up the running game's artwork (store art or box art) and show it as the large image.
+    public var showGameArtwork: Bool
 
     public static let defaultPollInterval: Double = 10
     public static let pollIntervalRange: ClosedRange<Double> = 3...300
+    /// The shared "PlayStation Vita" Discord application every user gets unless they set their own.
+    public static let defaultClientID = "1556140114374037715"
 
     public init(
         address: String = "",
@@ -30,7 +36,8 @@ public struct PresenceSettings: Sendable, Equatable, Codable {
         largeImageKey: String = "",
         pollInterval: Double = PresenceSettings.defaultPollInterval,
         showElapsedTime: Bool = true,
-        showLiveArea: Bool = true
+        showLiveArea: Bool = true,
+        showGameArtwork: Bool = true
     ) {
         self.address = address
         self.clientID = clientID
@@ -39,11 +46,13 @@ public struct PresenceSettings: Sendable, Equatable, Codable {
         self.pollInterval = pollInterval
         self.showElapsedTime = showElapsedTime
         self.showLiveArea = showLiveArea
+        self.showGameArtwork = showGameArtwork
     }
 
     /// The same names the synthesized `encode(to:)` writes.
     private enum CodingKeys: String, CodingKey {
-        case address, clientID, stateText, largeImageKey, pollInterval, showElapsedTime, showLiveArea
+        case address, clientID, stateText, largeImageKey, pollInterval, showElapsedTime, showLiveArea,
+             showGameArtwork
     }
 
     /// Tolerant decoding: any missing or mistyped key falls back to its default, so settings saved by older
@@ -61,7 +70,8 @@ public struct PresenceSettings: Sendable, Equatable, Codable {
             largeImageKey: decode(.largeImageKey, or: defaults.largeImageKey),
             pollInterval: decode(.pollInterval, or: defaults.pollInterval),
             showElapsedTime: decode(.showElapsedTime, or: defaults.showElapsedTime),
-            showLiveArea: decode(.showLiveArea, or: defaults.showLiveArea)
+            showLiveArea: decode(.showLiveArea, or: defaults.showLiveArea),
+            showGameArtwork: decode(.showGameArtwork, or: defaults.showGameArtwork)
         )
     }
 
@@ -72,7 +82,7 @@ public struct PresenceSettings: Sendable, Equatable, Codable {
         return .seconds(min(max(pollInterval, range.lowerBound), range.upperBound))
     }
 
-    /// The parsed address, or `nil` when it isn't a valid IPv4 or MAC address.
+    /// The parsed address (`.automatic` when empty), or `nil` when it isn't a valid IPv4 or MAC address.
     public var vitaAddress: VitaAddress? {
         VitaAddress(address)
     }
@@ -82,36 +92,56 @@ public struct PresenceSettings: Sendable, Equatable, Codable {
         clientID.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Problems that prevent connecting, in display order. Empty when the settings are usable.
-    /// The client ID must be 16–25 ASCII digits after trimming.
+    /// The Discord application to connect with: the custom ID when one is set, otherwise `defaultClientID`.
+    public var effectiveClientID: String {
+        let custom = trimmedClientID
+        return custom.isEmpty ? Self.defaultClientID : custom
+    }
+
+    /// `true` when a custom Discord application ID is set.
+    public var usesCustomClientID: Bool {
+        !trimmedClientID.isEmpty
+    }
+
+    /// Why `largeImageKey` won't be shown, or `nil` when it is blank or Discord would accept it.
+    /// An asset name with the built-in application is included: Discord has no such asset to show.
+    public var largeImageWarning: String? {
+        let image = largeImageKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !image.isEmpty else { return nil }
+        let lowercased = image.lowercased()
+        if lowercased.hasPrefix("http:") || lowercased.hasPrefix("https:") {
+            if DiscordActivity.acceptableImage(image) == nil {
+                return "Use an https URL of at most 256 characters, with no spaces"
+            }
+            return nil
+        }
+        if !usesCustomClientID {
+            return "An asset name only works with your own Discord application"
+        }
+        return nil
+    }
+
+    /// Problems that prevent connecting, in display order. Empty when the settings are usable, which includes
+    /// the defaults. A custom client ID must be 16–25 ASCII digits after trimming.
     public var issues: [Issue] {
         var issues: [Issue] = []
-        if address.isBlank {
-            issues.append(.missingAddress)
-        } else if vitaAddress == nil {
+        if vitaAddress == nil {
             issues.append(.invalidAddress)
         }
-        let clientID = trimmedClientID
-        if clientID.isEmpty {
-            issues.append(.missingClientID)
-        } else if !Self.isValidClientID(clientID) {
+        if usesCustomClientID, !Self.isValidClientID(trimmedClientID) {
             issues.append(.invalidClientID)
         }
         return issues
     }
 
     public enum Issue: Sendable, Equatable {
-        case missingAddress
         case invalidAddress
-        case missingClientID
         case invalidClientID
 
-        /// User-facing text, such as "Enter your Vita's IP or MAC address".
+        /// User-facing text, such as "That isn't a valid IP or MAC address".
         public var message: String {
             switch self {
-            case .missingAddress: "Enter your Vita's IP or MAC address"
             case .invalidAddress: "That isn't a valid IP or MAC address"
-            case .missingClientID: "Enter your Discord application ID"
             case .invalidClientID: "The application ID should be 16 to 25 digits"
             }
         }

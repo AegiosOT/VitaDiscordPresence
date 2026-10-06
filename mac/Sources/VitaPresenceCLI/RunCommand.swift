@@ -1,3 +1,4 @@
+import ArtworkKit
 import DiscordIPC
 import Foundation
 import PresenceKit
@@ -54,10 +55,21 @@ enum RunCommand {
 
     private static func makeController(_ options: RunOptions) -> PresenceController {
         let discord = options.discordSocket.map { path in DiscordIPCClient(socketPaths: { [path] }) }
+        let artwork: any ArtworkResolving = options.settings.showGameArtwork ? ArtworkResolver() : NoArtwork()
         return PresenceController(
             fetcher: VitaClient(port: options.port),
-            resolver: VitaResolver(scanner: ScanCommand.scanner(port: options.port)),
-            discord: discord ?? DiscordIPCClient()
+            // The CLI doesn't remember where the Vita answered, so automatic discovery starts with a scan.
+            // Artwork lookups are cached in the same directory as the app.
+            resolver: VitaResolver(scanner: ScanCommand.scanner(port: options.port), knownHost: nil),
+            discord: discord ?? DiscordIPCClient(),
+            artwork: artwork
         )
+    }
+}
+
+/// With `--no-artwork`, nothing is looked up at all.
+private struct NoArtwork: ArtworkResolving {
+    func artwork(for title: VitaTitle) async -> URL? {
+        nil
     }
 }

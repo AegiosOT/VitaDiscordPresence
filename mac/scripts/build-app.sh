@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# Builds VitaPresence.app with only the Command Line Tools (no Xcode), signs it, and optionally notarizes,
-# installs and zips it. Run with --help for the options.
+# Builds VitaPresence.app, signs it, and optionally notarizes, installs and zips it. Run with --help for
+# the options. When Xcode is installed it is used for this build so Liquid Glass (macOS 26) can compile;
+# the selected developer directory is left as it is.
 #
 # The app is assembled outside the repository (in ~/Library/Caches by default): the repository may live in
 # an iCloud-synced folder, where bundles pick up Finder metadata that makes codesign fail. Nothing is
@@ -19,8 +20,22 @@ package_dir="$(dirname "$script_dir")"
 repo_dir="$(dirname "$package_dir")"
 readonly script_dir package_dir repo_dir
 readonly info_plist="$package_dir/Resources/Info.plist"
-readonly icon_source="$repo_dir/pc/VitaPresence-GUI/Resources/Icon.ico"
+readonly icon_source="$package_dir/Resources/AppIcon.png"
 readonly build_root="${VITAPRESENCE_BUILD_DIR:-$HOME/Library/Caches/$bundle_id}"
+
+# SwiftUI's property-wrapper macros are in the Xcode platform, not the Command Line Tools. The compiler is
+# inside the toolchain; Developer/usr/bin/swift is not there on current Xcode.
+xcode_developer="/Applications/Xcode.app/Contents/Developer"
+toolchain_swift() {
+    printf '%s/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift' "$1"
+}
+swift_bin="swift"
+if [[ -n ${DEVELOPER_DIR:-} && -x $(toolchain_swift "$DEVELOPER_DIR") ]]; then
+    swift_bin="$(toolchain_swift "$DEVELOPER_DIR")"
+elif [[ -x $(toolchain_swift "$xcode_developer") ]]; then
+    export DEVELOPER_DIR="$xcode_developer"
+    swift_bin="$(toolchain_swift "$xcode_developer")"
+fi
 
 usage() {
     cat <<EOF
@@ -117,9 +132,9 @@ swift_args=(--package-path "$package_dir" --scratch-path "$build_root/swiftpm" -
 swift_args+=("${arch_flags[@]}")
 # SwiftPM's default build system records the deployment target as the SDK version, so macOS would treat the
 # app as built with the macOS 13 SDK and apply old AppKit behaviour. Record the real SDK instead.
-swift build "${swift_args[@]}" \
+"$swift_bin" build "${swift_args[@]}" \
     -Xlinker -platform_version -Xlinker macos -Xlinker "$minimum_macos" -Xlinker "$sdk_version"
-binary="$(swift build "${swift_args[@]}" --show-bin-path)/$app_name"
+binary="$("$swift_bin" build "${swift_args[@]}" --show-bin-path)/$app_name"
 built_archs="$(lipo -archs "$binary" | tr ' ' '\n' | sort | xargs)"
 [[ $built_archs == "$expected_archs" ]] || die "built for '$built_archs' instead of '$expected_archs'"
 
@@ -152,12 +167,11 @@ plutil -replace CFBundleShortVersionString -string "$version" "$plist"
 plutil -replace CFBundleVersion -string "$version" "$plist"
 printf 'APPL????' >"$app/Contents/PkgInfo"
 
-# The Windows client's .ico holds several sizes; sips reads the largest, 256 px. There is no larger source,
-# so the 256@2x slot gets an upscaled copy.
+# AppIcon.png is 1024 px. Each iconset slot is scaled from it, including the 1024 px Retina size.
 iconset="$work_dir/AppIcon.iconset"
 mkdir -p "$iconset"
 sips -s format png "$icon_source" --out "$work_dir/icon.png" >/dev/null
-for slot in 16x16:16 16x16@2x:32 32x32:32 32x32@2x:64 128x128:128 128x128@2x:256 256x256:256 256x256@2x:512; do
+for slot in 16x16:16 16x16@2x:32 32x32:32 32x32@2x:64 128x128:128 128x128@2x:256 256x256:256 256x256@2x:512 512x512:512 512x512@2x:1024; do
     size="${slot#*:}"
     sips -z "$size" "$size" "$work_dir/icon.png" --out "$iconset/icon_${slot%:*}.png" >/dev/null
 done
@@ -197,9 +211,21 @@ if $install; then
     mkdir -p "$destination"
     rm -rf "${destination:?}/$app_name.app"
     ditto "$app" "$destination/$app_name.app"
+    # A process that was already running keeps the old binary in memory after the bundle is replaced.
     if pgrep -x "$app_name" >/dev/null; then
-        echo "$app_name is running; quit and reopen it to use the new version."
+        step "Quitting the running $app_name"
+        osascript -e "tell application \"$app_name\" to quit" || true
+        for _ in $(seq 1 25); do
+            pgrep -x "$app_name" >/dev/null || break
+            sleep 0.2
+        done
+        if pgrep -x "$app_name" >/dev/null; then
+            killall "$app_name" || true
+            sleep 0.3
+        fi
     fi
+    step "Opening $destination/$app_name.app"
+    open "$destination/$app_name.app"
 fi
 
 if $make_zip; then

@@ -39,11 +39,11 @@ private func connected(_ title: VitaTitle? = persona, published: Bool = true) ->
     @Test func statusLine() {
         // The summaries come from PresenceKit; this checks how the CLI assembles them.
         let shown = connected()
-        #expect(utc.status(of: shown) == "Vita: \(shown.vita.summary) - Persona 4 Golden (PCSE00120) | "
+        #expect(utc.status(of: shown) == "Vita: \(shown.vita.summary) at 192.168.1.20 - Persona 4 Golden (PCSE00120) | "
             + "Discord: \(shown.discord.summary) | Presence: shown")
         let liveArea = connected(.liveArea, published: false)
-        #expect(utc.status(of: liveArea)
-            == "Vita: \(liveArea.vita.summary) - LiveArea | Discord: \(liveArea.discord.summary) | Presence: not shown")
+        #expect(utc.status(of: liveArea) == "Vita: \(liveArea.vita.summary) at 192.168.1.20 - LiveArea | "
+            + "Discord: \(liveArea.discord.summary) | Presence: not shown")
         let starting = PresenceSnapshot(isRunning: true, vita: .resolving, discord: .connecting)
         #expect(utc.status(of: starting)
             == "Vita: \(VitaStatus.resolving.summary) | Discord: \(DiscordStatus.connecting.summary) | Presence: not shown")
@@ -52,6 +52,32 @@ private func connected(_ title: VitaTitle? = persona, published: Bool = true) ->
         )
         #expect(utc.status(of: failing) == "Vita: \(failing.vita.summary) | Discord: \(failing.discord.summary) | "
             + "Presence: not shown")
+    }
+
+    @Test func theHostShowsOnlyWhileTheVitaAnswers() {
+        let trying = PresenceSnapshot(isRunning: true, vita: .connecting, discord: .connecting, host: "192.168.1.20")
+        #expect(utc.status(of: trying).hasPrefix("Vita: \(VitaStatus.connecting.summary) | "))
+        let failing = PresenceSnapshot(isRunning: true, vita: .failing(.timedOut, failures: 1), host: "192.168.1.20")
+        #expect(utc.status(of: failing).hasPrefix("Vita: \(failing.vita.summary) | "))
+        var unknownHost = connected()
+        unknownHost.host = nil
+        #expect(utc.status(of: unknownHost).hasPrefix("Vita: \(VitaStatus.connected.summary) - Persona 4 Golden"))
+    }
+
+    @Test func aPresenceWithAnImageSaysSo() {
+        var withArtwork = connected()
+        withArtwork.publishedActivity = DiscordActivity(
+            name: "Persona 4 Golden",
+            details: "PlayStation Vita",
+            assets: DiscordActivity.Assets(largeImage: "https://example.com/p4g.png", largeText: "Persona 4 Golden")
+        )
+        #expect(utc.status(of: withArtwork).hasSuffix(" | Presence: shown with image"))
+        // An image of the user's own Discord application counts too.
+        withArtwork.publishedActivity?.assets?.largeImage = "vita-logo"
+        #expect(utc.status(of: withArtwork).hasSuffix(" | Presence: shown with image"))
+        // A small image alone isn't the picture next to the game.
+        withArtwork.publishedActivity?.assets = DiscordActivity.Assets(largeImage: nil, smallImage: "vita-logo")
+        #expect(utc.status(of: withArtwork).hasSuffix(" | Presence: shown"))
     }
 
     @Test func titles() {
@@ -68,6 +94,10 @@ private func connected(_ title: VitaTitle? = persona, published: Bool = true) ->
 
     @Test func details() {
         #expect(utc.details(of: connected()) == "host 192.168.1.20, session since 22:13:20, last answer 22:13:20")
+        var withArtwork = connected()
+        withArtwork.artwork = URL(string: "https://example.com/p4g.png")
+        #expect(utc.details(of: withArtwork) == "host 192.168.1.20, session since 22:13:20, last answer 22:13:20, "
+            + "artwork https://example.com/p4g.png")
         #expect(utc.details(of: PresenceSnapshot(isRunning: true, vita: .connecting, discord: .connecting)) == "")
         let once = PresenceSnapshot(isRunning: true, vita: .failing(.timedOut, failures: 1), host: "10.0.0.2")
         #expect(utc.details(of: once) == "host 10.0.0.2, 1 failed poll")
@@ -77,16 +107,27 @@ private func connected(_ title: VitaTitle? = persona, published: Bool = true) ->
 
     @Test func startupLine() {
         var options = RunOptions()
+        #expect(utc.startup(options) == "Starting vitapresence-cli 2.0.0: Vita automatic port 51966, "
+            + "Discord application built-in (1556140114374037715), polling every 10 s. Press Ctrl-C to stop.")
+
         options.settings = PresenceSettings(address: " 192.168.1.20 ", clientID: " 123456789012345678\n")
         #expect(utc.startup(options) == "Starting vitapresence-cli 2.0.0: Vita 192.168.1.20 port 51966, "
             + "Discord application 123456789012345678, polling every 10 s. Press Ctrl-C to stop.")
 
-        options.settings = PresenceSettings(address: "A4:5E:60:1:2:3", clientID: "123456789012345678", pollInterval: 4.5)
+        options.settings = PresenceSettings(
+            address: "A4:5E:60:1:2:3",
+            clientID: "  ",
+            pollInterval: 4.5,
+            showGameArtwork: false
+        )
         options.port = 40000
         options.discordSocket = "/tmp/vp/discord-ipc-0"
         #expect(utc.startup(options) == "Starting vitapresence-cli 2.0.0: Vita a4:5e:60:01:02:03 port 40000, "
-            + "Discord application 123456789012345678, polling every 4.5 s, Discord socket /tmp/vp/discord-ipc-0. "
-            + "Press Ctrl-C to stop.")
+            + "Discord application built-in (1556140114374037715), polling every 4.5 s, no game artwork, "
+            + "Discord socket /tmp/vp/discord-ipc-0. Press Ctrl-C to stop.")
+
+        options.settings = PresenceSettings(address: "auto")
+        #expect(utc.startup(options).hasPrefix("Starting vitapresence-cli 2.0.0: Vita automatic port 40000, "))
     }
 
     @Test func secondsFormatting() {
@@ -114,8 +155,10 @@ private func connected(_ title: VitaTitle? = persona, published: Bool = true) ->
         #expect(printer.lines(for: later, at: noon.addingTimeInterval(1)) == ["[22:13:21] \(utc.status(of: later))"])
         // A successful poll that changes nothing visible prints nothing.
         later.lastSuccess = noon.addingTimeInterval(10)
-        later.host = "192.168.1.21"
         #expect(printer.lines(for: later, at: noon.addingTimeInterval(10)).isEmpty)
+        // The Vita moving to another address is news.
+        later.host = "192.168.1.21"
+        #expect(printer.lines(for: later, at: noon.addingTimeInterval(20)) == ["[22:13:40] \(utc.status(of: later))"])
         // Failures with the same message print once, however the count grows.
         let failing1 = PresenceSnapshot(isRunning: true, vita: .failing(.timedOut, failures: 1), discord: .connected(alex))
         let failing2 = PresenceSnapshot(isRunning: true, vita: .failing(.timedOut, failures: 2), discord: .connected(alex))
@@ -213,15 +256,16 @@ private func connected(_ title: VitaTitle? = persona, published: Bool = true) ->
     @Test func helpMentionsEveryOption() {
         let help = Usage.help
         for option in [
-            "--address <ip|mac>", "--client-id <id>", "--state <text>", "--interval <seconds>",
-            "--large-image <key|url>", "--no-elapsed", "--hide-livearea", "--verbose", "--scan", "-h, --help",
-            "--version", "--port <n>", "--discord-socket <path>",
+            "--address <ip|mac|auto>", "--client-id <id>", "--state <text>", "--interval <seconds>",
+            "--large-image <key|url>", "--no-artwork", "--no-elapsed", "--hide-livearea", "--verbose", "--scan",
+            "-h, --help", "--version", "--port <n>", "--discord-socket <path>",
         ] {
             #expect(help.contains(option), "\(option)")
         }
         #expect(help.contains("3 to 300 (default 10)"))
         #expect(help.contains("(default 51966)"))
-        #expect(help.contains("vitapresence-cli <ip|mac> <client-id>"))
+        #expect(help.contains("Usage: vitapresence-cli [options]\n"))
+        #expect(help.contains("vitapresence-cli <ip|mac> [<client-id>] [options]"))
         #expect(help.hasPrefix("vitapresence-cli 2.0.0: "))
         #expect(help.contains(Usage.synopsis))
     }
