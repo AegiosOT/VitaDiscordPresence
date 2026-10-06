@@ -19,10 +19,11 @@ import VitaKit
 ///   `VitaTitle.sessionKey` changes. If the Vita has been unreachable for `sessionResetAfter`, the session is
 ///   forgotten, so the next title starts a new one. "No previous title" is `nil`, never `""`, so the first
 ///   LiveArea packet starts a session.
-/// - **Failures:** a single failed poll keeps the presence and the Discord connection. After
-///   `clearAfterFailures` consecutive failures the title becomes `nil` and Discord is disconnected, which
-///   drops the application's name. An automatic or MAC address starts out `.resolving` and is invalidated
-///   in the resolver after every failure.
+/// - **Failures:** a single failed poll keeps the presence and the Discord connection. The title is cleared,
+///   and the helper exits, only after `clearAfterFailures` consecutive failures and `clearAfterUnreachable`
+///   of silence, so a couple of missed polls do not drop the game. An empty activity would leave the
+///   application's name up. An automatic or MAC address
+///   starts out `.resolving` and is invalidated in the resolver after every failure.
 /// - **Artwork:** when the title changes (or `showGameArtwork` is turned on), one lookup for its artwork
 ///   starts in the background. The sync waits up to `artworkGrace` for that lookup so a quick one is sent
 ///   once, text and image together; a slower lookup sends the text when the grace ends and the image when it
@@ -46,11 +47,14 @@ import VitaKit
 ///   Results of a poll that started before an address change are discarded.
 /// - **Responsiveness:** `pollNow()`, `updateSettings(_:)` and `stop()` interrupt the sleep between ticks
 ///   right away. `stop()` returns within about a second even mid-poll: it cancels the loop, disconnects
-///   Discord (which clears the activity, best effort), and publishes `.idle`.
+///   Discord (which drops the activity by closing the socket), and publishes `.idle`.
 public actor PresenceController {
     public struct Configuration: Sendable {
-        /// Consecutive failed polls before the presence is cleared.
+        /// Consecutive failed polls before the presence can be cleared.
         public var clearAfterFailures: Int = 2
+        /// How long the Vita must stay unreachable, as well as missing `clearAfterFailures` polls, before
+        /// Discord is dropped. `.zero` drops as soon as the failure count is reached.
+        public var clearAfterUnreachable: Duration = .seconds(60)
         /// How long the Vita may be unreachable before the elapsed-time session is forgotten.
         public var sessionResetAfter: Duration = .seconds(60)
         /// Backoff bounds after failed polls.
@@ -369,7 +373,7 @@ public actor PresenceController {
 
     private func tick() async {
         // A dropped socket is noticed before the poll, so putting the game back does not wait on a fetch.
-        // The first handshake still waits: there is nothing to show until a poll has succeeded.
+        // The first real handshake still waits: there is nothing to show until a poll has succeeded.
         if await discordDroppedWhileShowing() {
             await reflectDiscord()
             guard !Task.isCancelled else { return }
@@ -428,9 +432,10 @@ public actor PresenceController {
             attempt = connectAttempt
         } else {
             if let retryAt = invalidClientIDRetryAt, ContinuousClock.now < retryAt { return }
+            guard let desired = desiredActivity else { return }
             discordStatus = .connecting
             publish()
-            attempt = enqueueConnect(clientID: settings.effectiveClientID)
+            attempt = enqueueConnect(clientID: settings.effectiveClientID, activity: desired)
             connectAttempt = attempt
         }
         let generation = connectionGeneration
@@ -442,7 +447,8 @@ public actor PresenceController {
         case .success(let user):
             discordUser = user
             discordStatus = .connected(user)
-            // The handshake shows the application's name until the activity arrives, so publish it now.
+            // The helper publishes the game before it reports ready. Sync still runs so a title that
+            // changed during the handshake, or a sink that only handshakes, is caught up at once.
             requestSync()
         case .failure(let error):
             let error = error as? DiscordIPCError ?? .io(String(describing: error))
@@ -500,7 +506,9 @@ public actor PresenceController {
         consecutiveFailures += 1
         if failingSince == nil { failingSince = now }
         forgetSessionIfExpired(now: now)
-        if consecutiveFailures >= configuration.clearAfterFailures {
+        let quietLongEnough = configuration.clearAfterUnreachable <= .zero
+            || failingSince.map { now - $0 >= configuration.clearAfterUnreachable } == true
+        if consecutiveFailures >= configuration.clearAfterFailures, quietLongEnough {
             title = nil
             updateArtworkLookup()
         }
@@ -532,21 +540,21 @@ public actor PresenceController {
 
     // MARK: Discord connection
 
-    /// Connects after any earlier connect or teardown has finished.
-    private func enqueueConnect(clientID: String) -> Task<DiscordUser, any Error> {
+    /// Connects after any earlier connect or teardown has finished, and publishes `activity` with the handshake.
+    private func enqueueConnect(clientID: String, activity: DiscordActivity) -> Task<DiscordUser, any Error> {
         let previous = discordLifecycle
         let discord = discord
         let attempt = Task {
             await previous?.value
             try Task.checkCancellation()
-            return try await discord.connect(clientID: clientID)
+            return try await discord.connect(clientID: clientID, activity: activity)
         }
         discordLifecycle = Task { _ = await attempt.result }
         return attempt
     }
 
     /// Disconnects once any earlier connect or teardown has finished, so a connect that was in flight can't
-    /// leave a connection open. `disconnect()` clears the activity itself.
+    /// leave a connection open. `disconnect()` closes the socket and does not send an empty activity.
     private func enqueueTeardown() {
         let previous = discordLifecycle
         let discord = discord
@@ -630,7 +638,7 @@ public actor PresenceController {
             guard !Task.isCancelled, generation == connectionGeneration else { return }
             let desired = desiredActivity
             if desired == nil {
-                // A nil activity would leave the application's name on screen. Closing the socket drops it.
+                // Nothing to show. Close the socket. An empty activity would leave the application's name up.
                 if discordUser != nil {
                     disconnectDiscord(status: .idle, cancelSync: false)
                     publish()

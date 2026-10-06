@@ -137,6 +137,7 @@ final class AppModel: ObservableObject {
     nonisolated static func makePresenceController(remembered: RememberedVita) -> any PresenceControlling {
         PresenceController(
             resolver: VitaResolver(knownHost: remembered.host, knownMAC: remembered.macAddress),
+            discord: DiscordHelperClient(),
             artwork: ArtworkResolver()
         )
     }

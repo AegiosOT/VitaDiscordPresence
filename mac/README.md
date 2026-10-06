@@ -9,6 +9,14 @@ Mac finds the Vita on your network, asks it every few seconds, looks up the game
 on to the Discord desktop app. There is nothing to set up: no Discord application to create and no IP
 address to type.
 
+![Settings, with the address field open](../docs/settings-address.gif)
+
+![Settings, with More open](../docs/settings-more.gif)
+
+The window is one page. The card at the top is what Discord will show. **Console** is the Vita it remembers,
+**Presence** is the artwork, the LiveArea and the elapsed time, and **General** is launch and how often it
+asks the Vita. **More** holds a custom image, state text, and your own Discord application.
+
 - [Requirements](#requirements)
 - [Setup](#setup)
 - [What your friends see](#what-your-friends-see)
@@ -34,10 +42,17 @@ address to type.
 
 ### 1. Install the app
 
-1. Download the macOS release (a zip with `VitaPresence.app`) from the
-   [Releases page](https://github.com/AegiosOT/VitaDiscordPresence/releases), or
-   [build it yourself](#building-from-source).
-2. Unzip it and drag `VitaPresence.app` into your Applications folder.
+1. Install with Homebrew (needs Xcode 16 or later), or download the macOS
+   release from the [Releases page](https://github.com/AegiosOT/VitaDiscordPresence/releases):
+
+   ```sh
+   brew tap aegiosot/vitapresence https://github.com/AegiosOT/VitaDiscordPresence
+   brew install --HEAD vitapresence
+   vitapresence
+   ```
+
+   A downloaded zip contains `VitaPresence.app`. Drag that into your Applications
+   folder. You can also [build it yourself](#building-from-source).
 
 ### 2. Install the plugin on the Vita
 
@@ -63,8 +78,8 @@ address to type.
 
 ### 3. Open VitaPresence
 
-1. Open VitaPresence from your Applications folder. It lives in the menu bar as a game controller icon and
-   has no Dock icon.
+1. Open VitaPresence from your Applications folder. It lives in the menu bar, using the app icon, and has
+   no Dock icon.
 2. On macOS 15 and later, macOS asks whether VitaPresence may find and connect to devices on your local
    network. Click **Allow**: that's how it finds your Vita.
 3. That's it. Wake the Vita and start a game: Discord shows it as your status. The first time, finding the Vita can take a few seconds; after that VitaPresence asks it directly.
@@ -121,16 +136,18 @@ VitaPresence uses the first picture it finds. What it tries depends on the title
   a HexFlow cover. A title ID shared by several homebrew apps is used only when the names match.
 - **Adrenaline's menu:** Adrenaline's NeoVitaDB icon.
 - **The LiveArea:** the PlayStation Vita logo. It isn't looked up.
-- **System apps:** no picture. Discord shows the application's icon.
+- **System apps:** the bubble icon for the built-in apps (Settings, the browser, Photos, Music, and the
+  other home-screen apps). It isn't looked up. An internal system title with no known icon still has none.
 
 HexFlow-Covers is licensed under
 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/); the covers remain the property of
 their publishers.
 
-System apps such as Settings have no artwork. VitaPresence checks that a picture loads
-before handing it to Discord, and remembers what it found (pictures for 30 days, games without one for 3
-days) in `~/Library/Caches/io.github.aegiosot.VitaPresence/artwork.json`. The **Custom image** setting
-replaces the artwork with an image of your choice.
+Built-in apps such as Settings use a fixed icon, the same way the LiveArea does, so nothing is looked up
+for them. For games, VitaPresence checks that a picture loads before handing it to Discord, and remembers
+what it found (pictures for 30 days, games without one for 3 days) in
+`~/Library/Caches/io.github.aegiosot.VitaPresence/artwork.json`. The **Custom image** setting replaces the
+artwork with an image of your choice.
 
 ### Privacy
 
@@ -150,8 +167,7 @@ replaces the artwork with an image of your choice.
 
 | Icon | Meaning |
 |---|---|
-| Filled game controller | Your presence is showing on Discord. |
-| Outlined game controller | Nothing is showing: disconnected, looking for the Vita, or the Vita isn't answering. |
+| Vita | VitaPresence is running. |
 | Warning triangle | Something needs your attention: Local Network access denied, several Vitas found, an invalid address, or an invalid ID for your own Discord application. |
 
 ### Menu
@@ -168,7 +184,8 @@ replaces the artwork with an image of your choice.
 ### Settings
 
 Nothing needs to be set, but you can adjust what Discord shows. Changes are saved and applied automatically:
-text as soon as you stop typing for a moment or press Return, everything else right away.
+text as soon as you stop typing for a moment or press Return, everything else right away. The recordings
+at the top of this page are this window: the address field, then **More**.
 
 | Section | Setting | What it does |
 |---|---|---|
@@ -195,7 +212,8 @@ Connect or Disconnect button.
   different Vita that happens to be the only one awake.
 - The elapsed time restarts when you switch games or go to the LiveArea, and when the Vita has been
   unreachable for a minute.
-- A single missed poll keeps your presence; after two in a row it is cleared. While the Vita doesn't answer,
+- A missed poll keeps your presence. Discord is dropped only after the Vita has been unreachable for about a
+  minute (and at least two polls). While the Vita doesn't answer,
   VitaPresence backs off: it waits 5 seconds, then 10, 20 and at most 30 seconds between attempts, but never
   asks more often than the poll interval.
 - It polls right away when the Mac wakes from sleep or the network comes back.

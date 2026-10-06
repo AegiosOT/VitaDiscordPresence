@@ -9,12 +9,26 @@ struct HandshakePayload: Encodable {
     }
 }
 
-/// `{"cmd":"SET_ACTIVITY","args":{"pid":…,"activity":…},"nonce":…}`. A `nil` activity is left out, which
-/// clears the presence.
+/// `{"cmd":"SET_ACTIVITY","args":{"pid":…,"activity":…},"nonce":…}`. A `nil` activity is encoded as
+/// `null`. Omitting the key does not clear the presence: Discord keeps "Playing" plus the application name.
 struct SetActivityCommand: Encodable {
     struct Arguments: Encodable {
         var pid: Int32
         var activity: DiscordActivity?
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(pid, forKey: .pid)
+            if let activity {
+                try container.encode(activity, forKey: .activity)
+            } else {
+                try container.encodeNil(forKey: .activity)
+            }
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case pid, activity
+        }
     }
 
     var cmd = "SET_ACTIVITY"

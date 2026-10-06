@@ -1,5 +1,5 @@
 /// Why talking to Discord failed.
-public enum DiscordIPCError: Error, Equatable, Sendable {
+public enum DiscordIPCError: Error, Equatable, Sendable, Codable {
     /// No candidate socket accepted a connection: the Discord desktop app isn't running.
     case discordNotRunning
     /// Discord closed the connection during the handshake with code 4000: the application (client) ID

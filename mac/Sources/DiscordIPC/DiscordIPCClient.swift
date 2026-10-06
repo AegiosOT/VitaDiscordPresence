@@ -11,16 +11,33 @@ public protocol DiscordPresenceSink: Sendable {
     /// - Throws: `DiscordIPCError` (`.discordNotRunning`, `.invalidClientID`, `.timedOut`, …).
     func connect(clientID: String) async throws -> DiscordUser
 
+    /// Connects and, when `activity` is set, publishes it before returning.
+    ///
+    /// A handshake on its own makes Discord show the application's name. Sending the game in the same
+    /// connection, before the caller is told the connection is ready, is what keeps that name off the card.
+    /// If the activity is rejected, the connection is closed again so the name is not left up.
+    func connect(clientID: String, activity: DiscordActivity?) async throws -> DiscordUser
+
     /// Sends SET_ACTIVITY (`nil` clears the activity) and waits for Discord's reply with the matching nonce.
     /// - Throws: `DiscordIPCError.rpcError` when Discord rejects the payload (the connection stays usable),
     ///   `.notConnected` when not connected, `.timedOut` or `.io` when the connection broke (it is closed).
     func setActivity(_ activity: DiscordActivity?) async throws
 
-    /// Clears the activity if connected (best effort), sends CLOSE, and closes the socket. Never throws.
+    /// Sends CLOSE and closes the socket. Never throws. An empty activity is not sent: Discord replaces the
+    /// game with the application's name, and that name stays after the socket is gone.
     func disconnect() async
 
     /// `true` while the socket is open and READY has been received.
     var isConnected: Bool { get async }
+}
+
+extension DiscordPresenceSink {
+    /// The activity is for a sink that can publish it before it reports ready. The default connects only;
+    /// the caller sends the activity next.
+    public func connect(clientID: String, activity: DiscordActivity?) async throws -> DiscordUser {
+        _ = activity
+        return try await connect(clientID: clientID)
+    }
 }
 
 /// A native client for Discord's local IPC socket (`discord-ipc-N`), built on Network.framework
@@ -36,7 +53,7 @@ public protocol DiscordPresenceSink: Sendable {
 ///   with a PONG carrying the identical payload and routes replies to waiting commands by `nonce`. On CLOSE,
 ///   EOF or an error it marks the client disconnected and fails pending commands.
 /// - **setActivity:** `{"cmd":"SET_ACTIVITY","args":{"pid":<processID>,"activity":…},"nonce":<UUID>}`. When
-///   clearing, it omits `activity`. The activity is sent `sanitized()`.
+///   clearing, `activity` is `null`. The activity is sent `sanitized()`.
 /// - **writes:** every frame goes out in a single `send`.
 /// - **overlapping calls:** a `connect` that can't reuse a READY connection replaces whatever connection
 ///   exists or is being set up, and `disconnect` aborts a `connect` in progress (it throws `.notConnected`).
@@ -50,7 +67,7 @@ public actor DiscordIPCClient: DiscordPresenceSink {
 
     /// How long each candidate socket gets to accept the connection.
     private static let socketTimeout: Duration = .seconds(1)
-    /// Cap for each farewell step of `disconnect()`: the clearing SET_ACTIVITY and the CLOSE frame.
+    /// How long `disconnect()` waits for Discord to take the CLOSE frame.
     private static let farewellTimeout: Duration = .seconds(1)
     /// The CLOSE code for an application ID that doesn't exist.
     private static let invalidClientIDCode = 4000
@@ -116,9 +133,10 @@ public actor DiscordIPCClient: DiscordPresenceSink {
         guard clientID != nil else { return }
         let generation = generation
         if user != nil, let connection {
-            user = nil // Unusable from now on; the farewell's reply is still routed.
+            user = nil // Unusable from now on; the farewell is still sent on this connection.
+            // An empty SET_ACTIVITY replaces the game with "Playing <application name>", and Discord keeps
+            // that name after the socket closes. Closing while the game is still the last activity drops it.
             let farewellTimeout = min(timeout, Self.farewellTimeout)
-            try? await sendActivity(nil, on: connection, timeout: farewellTimeout, closesOnTimeout: false)
             if self.generation == generation {
                 let close = DiscordFrame(opcode: .close, payload: Data("{}".utf8))
                 await connection.sendAndWait(close.encoded(), queue: queue, timeout: farewellTimeout)

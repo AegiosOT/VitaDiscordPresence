@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>VitaPresence.Cli</RootNamespace>
+    <AssemblyName>vitapresence-cli</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\VitaPresence.Core\VitaPresence.Core.csproj" />
+    <ProjectReference Include="..\VitaPresence.Discord\VitaPresence.Discord.csproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+  </ItemGroup>
+  <Target Name="CopyDiscordHelper" AfterTargets="Build">
+    <PropertyGroup>
+      <_HelperRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)\</_HelperRid>
+      <_HelperDir>$(MSBuildThisFileDirectory)..\VitaPresence.Discord\bin\$(Configuration)\net10.0\$(_HelperRid)</_HelperDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <_HelperFile Include="$(_HelperDir)vitapresence-discord.exe" />
+      <_HelperFile Include="$(_HelperDir)vitapresence-discord.dll" />
+      <_HelperFile Include="$(_HelperDir)vitapresence-discord" />
+      <_HelperFile Include="$(_HelperDir)vitapresence-discord.runtimeconfig.json" />
+      <_HelperFile Include="$(_HelperDir)vitapresence-discord.deps.json" />
+      <_HelperFile Include="$(_HelperDir)VitaPresence.Core.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_HelperFile)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" Condition="Exists('%(_HelperFile.Identity)')" />
+  </Target>
+</Project>

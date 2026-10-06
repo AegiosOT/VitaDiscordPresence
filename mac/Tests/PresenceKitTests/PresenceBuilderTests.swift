@@ -74,6 +74,29 @@ import VitaKit
         #expect(custom?.assets == DiscordActivity.Assets(largeImage: "vita", largeText: "PlayStation Vita"))
     }
 
+    @Test func builtInAppsUseTheirOwnIcon() throws {
+        let settings = VitaTitle(index: 1, titleID: "NPXS10015", name: "Settings")
+        let icon = try #require(SystemAppIcons.image(for: "NPXS10015"))
+        #expect(activity(settings)?.assets == DiscordActivity.Assets(
+            largeImage: icon,
+            largeText: "Settings (NPXS10015)"
+        ))
+        #expect(activity(settings, artwork: art)?.assets?.largeImage == icon)
+        #expect(activity(settings, PresenceSettings(showGameArtwork: false))?.assets == nil)
+        let custom = activity(settings, PresenceSettings(largeImageKey: "vita"))
+        #expect(custom?.assets?.largeImage == "vita")
+
+        let browser = VitaTitle(index: 1, titleID: "npxs10003", name: "Browser")
+        #expect(activity(browser)?.assets?.largeImage == SystemAppIcons.image(for: "NPXS10003"))
+
+        let internalApp = VitaTitle(index: 1, titleID: "NPXS10063", name: "MsgMW")
+        #expect(activity(internalApp)?.assets == nil)
+        #expect(SystemAppIcons.images.count == 22)
+        for image in SystemAppIcons.images.values {
+            #expect(DiscordActivity.acceptableImage(image) == image)
+        }
+    }
+
     @Test func liveAreaCarriesItsSessionStartToo() {
         let result = activity(.liveArea, PresenceSettings(), sessionStart: start)
         #expect(result?.timestamps?.start == 1_700_000_000_250)

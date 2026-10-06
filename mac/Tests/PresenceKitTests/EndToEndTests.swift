@@ -23,6 +23,7 @@ import VitaKit
         configuration.minimumRetryDelay = .milliseconds(100)
         configuration.maximumRetryDelay = .milliseconds(200)
         configuration.clearAfterFailures = 2
+        configuration.clearAfterUnreachable = .zero
         configuration.activityBurst = 20
         configuration.activityWindow = .seconds(1)
         configuration.artworkGrace = .zero
@@ -84,9 +85,11 @@ import VitaKit
         #expect(largeImage(of: setActivities(discord).last ?? nil) == nil)
         #expect(await controller.snapshot.artwork == nil)
 
-        // Connections that close without a packet clear the presence after `clearAfterFailures` polls.
+        // Connections that close without a packet drop Discord after `clearAfterFailures` polls.
+        // The socket is closed; an empty activity is not sent.
         vita.setBehavior(.closeImmediately)
-        #expect(await eventually(timeout: .seconds(5)) { setActivities(discord).last.map { $0 == nil } ?? false })
+        #expect(await eventually(timeout: .seconds(5)) { discord.openConnectionCount == 0 })
+        #expect(names().last == nextGame.name)
         #expect(await controller.snapshot.title == nil)
         if case .failing(_, let failures) = await controller.snapshot.vita {
             #expect(failures >= 2)
@@ -105,7 +108,8 @@ import VitaKit
         discord.sendPing(probe)
         #expect(await eventually(timeout: .seconds(2)) { discord.pongs.contains(probe) })
 
-        // ...and stop() clears the activity once, then closes the connection.
+        // ...and stop() closes the connection, which drops the presence. An empty activity is not sent:
+        // that would leave the application's name on screen.
         let framesBeforeStop = discord.receivedFrames.count
         let began = ContinuousClock.now
         await controller.stop()
@@ -113,20 +117,10 @@ import VitaKit
         #expect(await controller.snapshot == .idle)
         #expect(await eventually { discord.openConnectionCount == 0 })
         let farewell = Array(discord.receivedFrames.dropFirst(framesBeforeStop))
-        #expect(farewell.map(\.opcode) == [.frame, .close])
-        #expect(farewell.first.map { isClear($0.payload) } == true)
+        #expect(farewell.map(\.opcode) == [.close])
         // A stopped controller doesn't connect again.
         let connections = discord.connectionCount
         #expect(await stays(for: .milliseconds(300)) { discord.connectionCount == connections })
-    }
-
-    /// Whether `payload` is a SET_ACTIVITY that clears the activity.
-    private func isClear(_ payload: Data) -> Bool {
-        guard let command = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
-              command["cmd"] as? String == "SET_ACTIVITY",
-              let arguments = command["args"] as? [String: Any]
-        else { return false }
-        return arguments["activity"] == nil
     }
 
     /// The `activity` of every SET_ACTIVITY the mock received, in order; `nil` for a clear.

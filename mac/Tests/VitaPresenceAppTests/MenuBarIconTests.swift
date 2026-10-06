@@ -7,9 +7,9 @@ struct MenuBarIconTests {
     static let activity = DiscordActivity(details: "Persona 4 Golden")
 
     @Test func symbols() {
-        #expect(MenuBarIcon.presence.systemImage == "gamecontroller.fill")
+        #expect(MenuBarIcon.presence.systemImage == nil)
         #expect(MenuBarIcon.attention.systemImage == "exclamationmark.triangle")
-        #expect(MenuBarIcon.standby.systemImage == "gamecontroller")
+        #expect(MenuBarIcon.standby.systemImage == nil)
     }
 
     @Test func publishedPresenceFillsTheController() {

@@ -32,6 +32,7 @@ extension PresenceController.Configuration {
         configuration.settingsDebounce = .milliseconds(60)
         configuration.invalidClientIDRetry = .seconds(60)
         configuration.artworkGrace = .zero
+        configuration.clearAfterUnreachable = .zero
         return configuration
     }
 }
@@ -250,7 +251,7 @@ actor FakeDiscord: DiscordPresenceSink {
         connectDelay = delay
     }
 
-    /// Makes `disconnect` take `duration`, like the real client waiting for the farewell clear and CLOSE when
+    /// Makes `disconnect` take `duration`, like the real client waiting for the clearing activity and CLOSE when
     /// Discord doesn't answer.
     func setDisconnectDuration(_ duration: Duration?) {
         disconnectDuration = duration

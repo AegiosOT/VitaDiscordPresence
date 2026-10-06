@@ -11,6 +11,7 @@
 set -euo pipefail
 
 readonly app_name="VitaPresence"
+readonly helper_name="vitapresence-discord"
 readonly bundle_id="io.github.aegiosot.VitaPresence"
 readonly minimum_macos="13.0"
 
@@ -138,17 +139,29 @@ binary="$("$swift_bin" build "${swift_args[@]}" --show-bin-path)/$app_name"
 built_archs="$(lipo -archs "$binary" | tr ' ' '\n' | sort | xargs)"
 [[ $built_archs == "$expected_archs" ]] || die "built for '$built_archs' instead of '$expected_archs'"
 
+# The helper is a second process: Discord drops the presence when it exits, which the menu-bar app cannot
+# do for itself. It is built with the same SDK and architectures as the app.
+helper_args=(--package-path "$package_dir" --scratch-path "$build_root/swiftpm" -c release --product "$helper_name")
+helper_args+=("${arch_flags[@]}")
+"$swift_bin" build "${helper_args[@]}" \
+    -Xlinker -platform_version -Xlinker macos -Xlinker "$minimum_macos" -Xlinker "$sdk_version"
+helper_binary="$("$swift_bin" build "${helper_args[@]}" --show-bin-path)/$helper_name"
+helper_archs="$(lipo -archs "$helper_binary" | tr ' ' '\n' | sort | xargs)"
+[[ $helper_archs == "$expected_archs" ]] || die "helper built for '$helper_archs' instead of '$expected_archs'"
+
 # --- Assemble ---
 
 step "Assembling $app"
 rm -rf "$app" "$work_dir"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$work_dir"
 cp "$binary" "$executable"
+readonly helper="$app/Contents/MacOS/$helper_name"
+cp "$helper_binary" "$helper"
 
 # SwiftPM adds an rpath into the toolchain, which an installed app must not depend on (it uses the Swift
 # runtime in macOS). Universal binaries list it once per slice, and one delete removes it from every slice.
 toolchain_rpaths() {
-    otool -l "$executable" | awk -v prefix="$(xcode-select -p)/" '
+    otool -l "$1" | awk -v prefix="$(xcode-select -p)/" '
         $2 == "LC_RPATH" { in_rpath = 1; next }
         in_rpath && $1 == "path" {
             in_rpath = 0
@@ -156,11 +169,16 @@ toolchain_rpaths() {
             if (index($0, prefix) == 1 && !seen[$0]++) print
         }'
 }
-while IFS= read -r rpath; do
-    # install_name_tool warns that this invalidates the signature, which is expected: the bundle is signed below.
-    output="$(install_name_tool -delete_rpath "$rpath" "$executable" 2>&1)" || die "install_name_tool: $output"
-done < <(toolchain_rpaths)
-[[ -z $(toolchain_rpaths) ]] || die "the toolchain rpath is still in $executable"
+strip_toolchain_rpath() {
+    local binary="$1"
+    while IFS= read -r rpath; do
+        # install_name_tool warns that this invalidates the signature, which is expected: the bundle is signed below.
+        output="$(install_name_tool -delete_rpath "$rpath" "$binary" 2>&1)" || die "install_name_tool: $output"
+    done < <(toolchain_rpaths "$binary")
+    [[ -z $(toolchain_rpaths "$binary") ]] || die "the toolchain rpath is still in $binary"
+}
+strip_toolchain_rpath "$executable"
+strip_toolchain_rpath "$helper"
 
 cp "$info_plist" "$plist"
 plutil -replace CFBundleShortVersionString -string "$version" "$plist"
@@ -176,6 +194,8 @@ for slot in 16x16:16 16x16@2x:32 32x32:32 32x32@2x:64 128x128:128 128x128@2x:256
     sips -z "$size" "$size" "$work_dir/icon.png" --out "$iconset/icon_${slot%:*}.png" >/dev/null
 done
 iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
+# The menu bar builds its own picture from this, so the unmasked artwork has to be in the bundle.
+cp "$icon_source" "$app/Contents/Resources/AppIcon.png"
 
 # --- Sign ---
 
@@ -185,6 +205,12 @@ if [[ $identity != "-" ]]; then
     sign_args+=(--options runtime --timestamp)
 fi
 xattr -cr "$app" # Stray extended attributes make strict verification fail.
+# The helper is signed first. The app signature then covers it as nested code.
+helper_sign=(--force --sign "$identity" --identifier "io.github.aegiosot.vitapresence-discord")
+if [[ $identity != "-" ]]; then
+    helper_sign+=(--options runtime --timestamp)
+fi
+codesign "${helper_sign[@]}" "$helper"
 codesign "${sign_args[@]}" "$app"
 codesign --verify --strict --verbose=2 "$app"
 plutil -lint "$plist"

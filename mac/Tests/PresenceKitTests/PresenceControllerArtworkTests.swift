@@ -358,9 +358,12 @@ import VitaKit
             #expect(await eventually { await h.controller.snapshot.publishedActivity?.name == "Settings" })
             let polls = await fetcher.callCount
             #expect(await eventually { await fetcher.callCount >= polls + 3 })
-            #expect(await artwork.calls.isEmpty)
-            #expect(await h.controller.snapshot.publishedActivity?.assets == nil)
+            #expect(await artwork.calls.isEmpty, "a built-in app's icon is fixed; it isn't looked up")
             #expect(await h.controller.snapshot.artwork == nil)
+            #expect(
+                await h.controller.snapshot.publishedActivity?.assets?.largeImage
+                    == SystemAppIcons.image(for: settingsApp.titleID)
+            )
 
             // Adrenaline's menu is looked up: its artwork is Adrenaline's icon.
             await fetcher.setSteps(.title(adrenalineMenu))

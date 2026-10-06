@@ -42,8 +42,8 @@ import VitaKit
         #expect(tool.process.terminationReason == .exit)
         #expect(tool.process.terminationStatus == EXIT_SUCCESS)
         #expect(await eventually { discord.receivedFrames.last?.opcode == .close })
-        #expect(setActivities(discord).last == .some(nil), "the presence is cleared before closing")
-        #expect(setActivities(discord).filter { $0 == nil }.count == 1)
+        #expect(setActivities(discord).last == .some(Self.game.name))
+        #expect(setActivities(discord).filter { $0 == nil }.isEmpty, "closing drops the presence; an empty activity would show the application's name")
         let output = tool.outputLines()
         #expect(output.dropLast().last?.hasSuffix("Stopping (press Ctrl-C again to quit immediately)…") == true)
         #expect(output.last?.hasSuffix("Stopped.") == true)
@@ -67,7 +67,7 @@ import VitaKit
         #expect(tool.process.terminationReason == .exit, "not killed by SIGPIPE")
         #expect(tool.process.terminationStatus == EXIT_SUCCESS)
         #expect(await eventually { discord.receivedFrames.last?.opcode == .close })
-        #expect(setActivities(discord).last == .some(nil))
+        #expect(setActivities(discord).last == .some(Self.game.name))
     }
 
     @Test func withoutAClientIDTheBuiltInApplicationIsUsed() async throws {

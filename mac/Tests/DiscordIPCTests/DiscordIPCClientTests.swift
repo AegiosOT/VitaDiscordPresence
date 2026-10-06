@@ -59,9 +59,9 @@ import os
         #expect(server.connectionCount == 2)
         let clientIDs = try server.handshakes.map { try jsonObject($0)["client_id"] as? String }
         #expect(clientIDs == ["1111111111111111111", "2222222222222222222"])
-        // The first connection was disconnected properly: its activity cleared, then CLOSE.
-        let clear = try jsonObject(try #require(server.commands.first))
-        #expect((clear["args"] as? [String: Any]).map { Set($0.keys) } == ["pid"])
+        // The first connection was closed without an empty activity. A null activity would replace the game
+        // with the application's name, and Discord keeps that name.
+        #expect(server.commands.isEmpty)
         #expect(await eventually { server.receivedFrames.contains { $0.opcode == .close } })
         await client.disconnect()
     }
@@ -280,7 +280,7 @@ import os
         await client.disconnect()
     }
 
-    @Test func clearingOmitsTheActivityKey() async throws {
+    @Test func clearingSendsANullActivity() async throws {
         let server = try MockDiscordServer()
         defer { server.stop() }
         let client = makeClient(server)
@@ -289,7 +289,8 @@ import os
         try await client.setActivity(nil)
         let command = try jsonObject(try #require(server.commands.last))
         #expect(command["cmd"] as? String == "SET_ACTIVITY")
-        #expect((command["args"] as? [String: Any]).map { Set($0.keys) } == ["pid"])
+        let args = try #require(command["args"] as? [String: Any])
+        #expect(args["activity"] is NSNull)
         await client.disconnect()
     }
 
@@ -495,7 +496,7 @@ import os
 
     // MARK: - Disconnecting
 
-    @Test func disconnectClearsTheActivityThenSendsClose() async throws {
+    @Test func disconnectClosesWithoutAnEmptyActivity() async throws {
         let server = try MockDiscordServer()
         defer { server.stop() }
         let client = makeClient(server)
@@ -506,13 +507,11 @@ import os
         #expect(await !client.isConnected)
         #expect(await eventually { server.receivedFrames.last?.opcode == .close })
         let frames = server.receivedFrames
-        #expect(frames.map(\.opcode) == [.handshake, .frame, .frame, .close])
-        let clear = try jsonObject(frames[2].payload)
-        #expect((clear["args"] as? [String: Any]).map { Set($0.keys) } == ["pid"])
+        #expect(frames.map(\.opcode) == [.handshake, .frame, .close])
         #expect(frames.last?.payload == Data("{}".utf8))
 
         await client.disconnect()
-        #expect(server.receivedFrames.count == 4)
+        #expect(server.receivedFrames.count == 3)
         await #expect(throws: DiscordIPCError.notConnected) {
             try await client.setActivity(nil)
         }
@@ -527,13 +526,13 @@ import os
         let update = Task { try await client.setActivity(DiscordActivity(details: "Game")) }
         #expect(await eventually { server.commands.count == 1 })
         let start = ContinuousClock.now
-        await client.disconnect() // The clear isn't answered either; disconnect gives up on it after ~1 s.
+        await client.disconnect()
         #expect(ContinuousClock.now - start < .seconds(5))
         await #expect(throws: DiscordIPCError.notConnected) {
             try await update.value
         }
         #expect(await eventually { server.receivedFrames.last?.opcode == .close })
-        #expect(server.receivedFrames.map(\.opcode) == [.handshake, .frame, .frame, .close])
+        #expect(server.receivedFrames.map(\.opcode) == [.handshake, .frame, .close])
     }
 
     @Test func overlappingConnectsSettleOnOneConnection() async throws {

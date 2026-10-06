@@ -20,6 +20,7 @@ let package = Package(
     products: [
         .executable(name: "VitaPresence", targets: ["VitaPresenceApp"]),
         .executable(name: "vitapresence-cli", targets: ["VitaPresenceCLI"]),
+        .executable(name: "vitapresence-discord", targets: ["VitaPresenceDiscord"]),
     ],
     targets: [
         // Vita protocol and LAN networking.
@@ -37,6 +38,12 @@ let package = Package(
         .executableTarget(
             name: "VitaPresenceCLI",
             dependencies: ["PresenceKit", "VitaKit", "DiscordIPC", "ArtworkKit"]
+        ),
+        // Owns the Discord socket for the menu-bar app, and exits when the Vita disconnects. Discord drops
+        // the presence when this process ends; closing the socket from the long-lived app does not.
+        .executableTarget(
+            name: "VitaPresenceDiscord",
+            dependencies: ["DiscordIPC"]
         ),
 
         // Loopback mock servers (fake Vita plugin, fake Discord) shared by the test targets.
@@ -65,7 +72,7 @@ let package = Package(
         // built `vitapresence-cli` against the loopback mocks. No LAN traffic, no GUI.
         .testTarget(
             name: "VitaPresenceAppTests",
-            dependencies: ["VitaPresenceApp", "PresenceKit", "VitaKit", "DiscordIPC", "ArtworkKit"],
+            dependencies: ["VitaPresenceApp", "PresenceKit", "VitaKit", "DiscordIPC", "ArtworkKit", "TestSupport"],
             swiftSettings: testSwiftSettings
         ),
         .testTarget(

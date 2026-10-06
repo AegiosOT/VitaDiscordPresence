@@ -18,7 +18,8 @@ public enum PresenceBuilder {
     /// - large image = `settings.largeImageKey` when Discord would keep it (an asset key, or an https URL of
     ///   at most 256 characters with no whitespace). A custom value Discord would drop falls back to `artwork`
     ///   when `settings.showGameArtwork` is on, so a bad URL doesn't hide the game's picture. The LiveArea
-    ///   uses `liveAreaImage` (the application's icon is a question mark). Large text = name and
+    ///   uses `liveAreaImage`, and a built-in app uses its icon from `SystemAppIcons` (the application's icon
+    ///   is a question mark when there is none). Large text = name and
     ///   title ID, "Persona 4 Golden (PCSE00120)" (the name alone when there is no title ID or the name is the
     ///   title ID), with a long name shortened so the title ID still fits.
     /// - The result is `sanitized()`, so it always passes Discord's field validation.
@@ -78,6 +79,7 @@ public enum PresenceBuilder {
         if let custom = DiscordActivity.acceptableImage(settings.largeImageKey) { return custom }
         guard settings.showGameArtwork else { return nil }
         if title.isLiveArea { return liveAreaImage }
+        if title.kind == .systemApp { return SystemAppIcons.image(for: title.titleID) }
         return artwork?.absoluteString
     }
 

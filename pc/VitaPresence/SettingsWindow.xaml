@@ -1,0 +1,110 @@
+<Window
+    x:Class="VitaPresence.App.SettingsWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:tb="using:H.NotifyIcon"
+    Title="VitaPresence Settings">
+    <Grid Padding="24" RowSpacing="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <tb:TaskbarIcon
+            x:Name="Tray"
+            Width="0"
+            Height="0"
+            ToolTipText="VitaPresence"
+            MenuActivation="RightClick"
+            NoLeftClickDelay="True"
+            ContextMenuMode="PopupMenu">
+            <tb:TaskbarIcon.ContextFlyout>
+                <MenuFlyout>
+                    <MenuFlyoutItem x:Name="SettingsItem" Text="Settings" />
+                    <MenuFlyoutItem x:Name="ConnectItem" Text="Connect" />
+                    <MenuFlyoutSeparator />
+                    <MenuFlyoutItem x:Name="QuitItem" Text="Quit" />
+                </MenuFlyout>
+            </tb:TaskbarIcon.ContextFlyout>
+        </tb:TaskbarIcon>
+
+        <Border Grid.Row="0" Padding="16" CornerRadius="8" BorderThickness="1" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+            <Grid ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Spacing="4">
+                    <TextBlock x:Name="StatusText" Text="Not connected" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" />
+                    <TextBlock Text="Discord shows this while the Vita is connected." Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                </StackPanel>
+                <Button x:Name="ConnectButton" Grid.Column="1" Content="Connect" MinWidth="120" VerticalAlignment="Center" Click="Connect_Click" />
+            </Grid>
+        </Border>
+
+        <ScrollViewer Grid.Row="1">
+            <Grid ColumnSpacing="24">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Spacing="12">
+                    <TextBlock Text="Console" FontWeight="SemiBold" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <StackPanel x:Name="ProfilesHost" Spacing="8" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="FindButton" Content="Find on network" Click="Find_Click" />
+                        <ProgressRing x:Name="ScanRing" Width="20" Height="20" IsActive="False" Visibility="Collapsed" />
+                    </StackPanel>
+                    <StackPanel x:Name="FoundHost" Spacing="8" />
+                    <TextBlock x:Name="WarningText" Foreground="{ThemeResource SystemFillColorCriticalBrush}" TextWrapping="Wrap" Visibility="Collapsed" />
+                    <Expander Header="Enter an address" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                        <TextBox x:Name="AddressBox" PlaceholderText="Automatic" Margin="0,8,0,0" TextChanged="Address_TextChanged" />
+                    </Expander>
+                    <TextBlock x:Name="AddressIssue" Foreground="{ThemeResource SystemFillColorCriticalBrush}" TextWrapping="Wrap" Visibility="Collapsed" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Spacing="20">
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="Presence" FontWeight="SemiBold" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Border Padding="12" CornerRadius="8" BorderThickness="1" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+                            <StackPanel Spacing="8">
+                                <ToggleSwitch x:Name="ArtworkToggle" Header="Show game artwork" OnContent="" OffContent="" Toggled="Setting_Toggled" />
+                                <ToggleSwitch x:Name="LiveAreaToggle" Header="Show the LiveArea" OnContent="" OffContent="" Toggled="Setting_Toggled" />
+                                <ToggleSwitch x:Name="ElapsedToggle" Header="Show elapsed time" OnContent="" OffContent="" Toggled="Setting_Toggled" />
+                            </StackPanel>
+                        </Border>
+                        <Expander x:Name="MoreExpander" Header="More" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                            <StackPanel Spacing="8" Margin="0,8,0,0">
+                                <TextBox x:Name="ImageBox" Header="Custom image (replaces game artwork)" PlaceholderText="Asset key or https URL" TextChanged="Image_TextChanged" />
+                                <TextBlock x:Name="ImageWarning" Foreground="{ThemeResource SystemFillColorCriticalBrush}" TextWrapping="Wrap" Visibility="Collapsed" />
+                                <TextBox x:Name="StateBox" Header="State text" PlaceholderText="Optional" TextChanged="State_TextChanged" />
+                                <ToggleSwitch x:Name="OwnAppToggle" Header="Use my own Discord application" OnContent="" OffContent="" Toggled="OwnApp_Toggled" />
+                                <StackPanel x:Name="OwnAppPanel" Spacing="8" Visibility="Collapsed">
+                                    <TextBox x:Name="ClientIdBox" Header="Application ID" PlaceholderText="Built-in" TextChanged="ClientId_TextChanged" />
+                                    <TextBlock x:Name="ClientIssue" Foreground="{ThemeResource SystemFillColorCriticalBrush}" TextWrapping="Wrap" Visibility="Collapsed" />
+                                    <HyperlinkButton Content="Open the Discord Developer Portal" NavigateUri="https://discord.com/developers/applications" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Expander>
+                    </StackPanel>
+
+                    <StackPanel Spacing="12">
+                        <TextBlock Text="General" FontWeight="SemiBold" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Border Padding="12" CornerRadius="8" BorderThickness="1" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+                            <StackPanel Spacing="8">
+                                <ToggleSwitch x:Name="ConnectOnLaunchToggle" Header="Connect automatically at launch" OnContent="" OffContent="" Toggled="Setting_Toggled" />
+                                <ToggleSwitch x:Name="LaunchAtLoginToggle" Header="Launch at login" OnContent="" OffContent="" Toggled="Launch_Toggled" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="Check every" VerticalAlignment="Center" />
+                                    <NumberBox x:Name="IntervalBox" Width="100" Minimum="3" Maximum="300" SpinButtonPlacementMode="Inline" ValueChanged="Interval_Changed" />
+                                    <TextBlock Text="seconds" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+    </Grid>
+</Window>

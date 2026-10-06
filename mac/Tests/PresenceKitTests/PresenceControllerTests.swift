@@ -123,6 +123,28 @@ import VitaKit
         }
     }
 
+    @Test func briefFailuresDoNotDropDiscord() async throws {
+        let fetcher = FakeFetcher(.title(persona), .failure(.timedOut))
+        await fetcher.pause(atCall: 4)
+        try await withController(fetcher, configure: {
+            $0.clearAfterFailures = 2
+            $0.clearAfterUnreachable = .milliseconds(250)
+        }) { h in
+            await h.controller.start(with: .valid)
+            #expect(await eventually { await fetcher.callCount == 4 })
+
+            let held = await h.controller.snapshot
+            #expect(held.title == persona)
+            #expect(held.publishedActivity?.name == persona.name)
+            #expect(await h.discord.disconnects == 0)
+
+            await fetcher.resume()
+            #expect(await eventually { await h.discord.disconnects == 1 })
+            #expect(await h.controller.snapshot.title == nil)
+            #expect(await h.controller.snapshot.discord == .idle)
+        }
+    }
+
     @Test func clearAfterFailuresClearsThePresence() async throws {
         let fetcher = FakeFetcher(.title(persona), .failure(.timedOut))
         await fetcher.pause(atCall: 4)

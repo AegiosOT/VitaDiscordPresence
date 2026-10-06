@@ -1,35 +1,72 @@
 # VitaPresence
-Change your Discord rich presence to your currently playing PS Vita game!
 
-Inspired by [SwitchPresence](https://github.com/Sun-Research-University/SwitchPresence-Rewritten)
-<br>
+Show the game you're playing on a PS Vita as your Discord status.
 
-![vitapresence](https://user-images.githubusercontent.com/12598379/78289782-fc45eb80-7522-11ea-8d5c-1deb49b1cb9c.png)
+A kernel plugin on the Vita reports whichever app is in the foreground. A client on your computer asks it over Wi-Fi and passes that to the Discord desktop app: the game's name, its artwork, and how long you've been playing. It works with Vita games, homebrew, and PSP and PS1 games running in Adrenaline.
 
-Works with PSVita & Adrenaline (including custom bubbles) games/apps
+The client has to be running, and the computer has to be on the same network as the Vita. Discord's desktop app has to be running too. Discord in a browser can't show this.
 
-## What's in this repository
-| Folder | Contents |
-|---|---|
-| [`plugin/`](plugin) | The Vita kernel plugin (`VitaPresence.skprx`), which reports the game in the foreground (since v1.1 with its PlayStation Store content ID) over Wi-Fi |
-| [`pc/`](pc) | The Windows client: a tray app (`VitaPresence-GUI`) and a command-line client (`VitaPresence-CLI`) |
-| [`mac/`](mac) | The macOS client: a menu-bar app and a command-line client (`vitapresence-cli`) |
+## The Vita plugin
 
-## Disclaimer
-The client app (on a Windows PC or a Mac) must be running in the background, and the computer must be on the same network as your Vita.
+Copy `VitaPresence.skprx` into `ux0:tai/` and add it under `*KERNEL` in `ux0:tai/config.txt`, then reboot the Vita.
 
-It would be nice to have rich presence working with only the Vita itself, but this isn't currently possible due to Discord's RPC API restrictions.
+```
+*KERNEL
+ux0:tai/VitaPresence.skprx
+```
 
-## Setup
-- Install the .skprx plugin within the `*KERNEL` section of your taiHEN config.txt. Version 1.1 from the [releases](https://github.com/AegiosOT/VitaDiscordPresence/releases) is recommended: it lets the macOS client show the game's official PlayStation Store artwork. The original v1.0 plugin works too.
-- **macOS:** install the VitaPresence app, open it, and click **Allow** when macOS asks about your local network. That's all: it finds your Vita by itself, comes with its own Discord application, and Discord shows the game's name, artwork and play time. See [mac/README.md](mac/README.md).
-- **Windows:** create an application at the [Discord Developer Portal](https://discord.com/developers/applications), call your application `PS Vita` or whatever you would like and then enter your client ID and Vita's IP or MAC address into the VitaPresence client!
-<br>
+Use v1.1 from the [releases](https://github.com/AegiosOT/VitaDiscordPresence/releases). It also sends the game's PlayStation Store content ID, which is how the app shows the store picture. The original [v1.0 plugin](https://github.com/Electry/VitaPresence/releases) still works; the app then looks the game up by name.
 
 ## macOS
-The macOS client is a native menu-bar app for macOS 13 or later (Apple silicon and Intel). It needs no setup: it finds your Vita on the network by itself and uses a built-in Discord application. Discord shows the game's name as the title, its artwork (from the PlayStation Store, HexFlow-Covers or NeoVitaDB) and how long you've been playing. It works with the original plugin too, and comes with a command-line client. See [mac/README.md](mac/README.md) for installation, setup, privacy, building from source and troubleshooting.
+
+The Mac app lives in the menu bar. It finds the Vita on your network by itself, and it ships with a Discord application, so you don't create one in the Developer Portal and you don't have to type an address.
+
+![VitaPresence Settings, opening the address field](docs/settings-address.gif)
+
+The window is a single page. Along the top is the status Discord will show, and a Connect or Disconnect button. **Console** is the Vita it remembers. **Presence** and **General** are what friends see, and when the app connects.
+
+![VitaPresence Settings, with More open](docs/settings-more.gif)
+
+**More** is optional: a custom image in place of the game's artwork, a line of state text, or your own Discord application.
+
+### Install
+
+macOS 13 or later, Apple silicon or Intel. Homebrew builds the app, which needs Xcode 16 or later:
+
+```sh
+brew tap aegiosot/vitapresence https://github.com/AegiosOT/VitaDiscordPresence
+brew install --HEAD vitapresence
+vitapresence
+```
+
+Open VitaPresence and click **Allow** when macOS asks about the local network. That's how it finds the Vita.
+
+`VitaPresence.app` is also on the [releases](https://github.com/AegiosOT/VitaDiscordPresence/releases) page. Move it to your Applications folder.
+
+Wake the Vita and start a game. The first search can take a few seconds; after that it asks the Vita directly.
+
+Artwork, the command-line client, and troubleshooting are in [mac/README.md](mac/README.md).
+
+## Windows
+
+The Windows app does the same job. It sits in the notification area, finds the Vita on the network, and uses the same built-in Discord application. Closing the window leaves it running; Quit on the tray menu exits.
+
+![VitaPresence Settings on Windows, opening the address field](docs/windows-settings-address.gif)
+
+The window is a single page, with the same controls as the Mac app.
+
+![VitaPresence Settings on Windows, with More open](docs/windows-settings-more.gif)
+
+**More** is optional here too: a custom image, a line of state text, or your own Discord application.
+
+### Install
+
+Windows 10 or later. There is no installer yet: [build the app](build.md#windows) and run it. A `Config.json` left beside the old Windows client is read once. Its address becomes a saved Vita, and a client ID becomes your own Discord application.
 
 ## Credits
+
 - [Electry](https://github.com/Electry) for the original VitaPresence plugin and Windows client
-- [Sun-Research-University](https://github.com/Sun-Research-University) for the idea & desktop app codebase
-- Game artwork in the macOS client: the PlayStation Store, [HexFlow-Covers](https://github.com/Andiweli/HexFlow-Covers) by Andiweli ([CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)) and [NeoVitaDB](https://github.com/robin994/NeoVitaDB-Catalog) by robin994
+- [Sun-Research-University](https://github.com/Sun-Research-University) for the idea and the desktop app it grew out of ([SwitchPresence](https://github.com/Sun-Research-University/SwitchPresence-Rewritten))
+- Game artwork: the PlayStation Store, [HexFlow-Covers](https://github.com/Andiweli/HexFlow-Covers) by Andiweli ([CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)), and [NeoVitaDB](https://github.com/robin994/NeoVitaDB-Catalog) by robin994
+
+Building from source is in [build.md](build.md).
